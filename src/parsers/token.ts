@@ -93,10 +93,16 @@ export function tokenize(sql: string): Token[] {
     if (/[0-9]/.test(ch)) {
       const start = i;
       while (i < sql.length && /[0-9.]/.test(sql[i]!)) i += 1;
+      // Scientific notation, with or without a sign: 1e3, 1E10, 1.5e-3. Without
+      // the unsigned case `1e999` split into `1` + the word `e999`, and the parser
+      // then read `e999` as a column name.
       if (sql[i] === "e" || sql[i] === "E") {
-        const sign = sql[i + 1];
-        if ((sign === "+" || sign === "-") && /[0-9]/.test(sql[i + 2] ?? "")) {
+        const next = sql[i + 1];
+        if (/[0-9]/.test(next ?? "")) {
           i += 2;
+          while (i < sql.length && /[0-9]/.test(sql[i]!)) i += 1;
+        } else if ((next === "+" || next === "-") && /[0-9]/.test(sql[i + 2] ?? "")) {
+          i += 3;
           while (i < sql.length && /[0-9]/.test(sql[i]!)) i += 1;
         }
       }

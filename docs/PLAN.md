@@ -256,7 +256,7 @@ README 提供 Claude/Qoder/Cursor 的 `mcpServers` 一行配置 JSON。
 
 ## 12. 验收清单(项目完成 = 全部勾选)
 
-- [x] `npm install && npm run build && npm test` 全绿（186 测试，CI 在 Node 18/20/22 矩阵通过）
+- [x] `npm install && npm run build && npm test` 全绿（206 测试，CI 在 Node 18/20/22 矩阵通过）
 - [x] `sia examples/slow.log` 输出可读报告（中英两种语言实跑过）
 - [x] `--emit-sql` 生成的迁移文件已去重、只含 ADD INDEX（CI smoke 机器校验；SQL 语法仍需人工评审）
 - [x] MCP server 真 stdio JSON-RPC 握手实测通过（本机 + CI runner 各一次）

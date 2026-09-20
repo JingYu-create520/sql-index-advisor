@@ -194,7 +194,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-185 个测试。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份"脏"的：有 administrator command、多行语句和一条没闭合的尾部语句。
+206 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份"脏"的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

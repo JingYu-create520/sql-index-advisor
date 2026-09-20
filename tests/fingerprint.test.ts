@@ -48,6 +48,33 @@ describe("fingerprint", () => {
     expect(fingerprint(short)).toContain("in(?)");
   });
 
+  it("treats a negative literal as one value, not an operator plus a number", () => {
+    // Found by the fuzz suite: `x = -3` masked to `x=-?` while `x = 3` gave `x=?`,
+    // which split one query pattern into two fingerprints and broke aggregation.
+    const positive = "SELECT id FROM t WHERE a = 3 AND b = 12";
+    const negative = "SELECT id FROM t WHERE a = -3 AND b = -12";
+    expect(fingerprint(positive)).toBe(fingerprint(negative));
+    expect(fingerprint(negative)).toContain("a=?");
+
+    expect(maskLiterals("WHERE a = -3.5 AND b IN (-1, -2)")).toBe("WHERE a = ? AND b IN (?, ?)");
+  });
+
+  it("keeps arithmetic visible instead of folding it into an equality", () => {
+    // `1` and `5` are literals and do get masked; the point is that the minus
+    // survives, so `a - 1 = 5` never collapses onto `a = 5`.
+    expect(fingerprint("SELECT id FROM t WHERE a - 1 = 5")).toBe(
+      fingerprint("SELECT id FROM t WHERE a - 9 = 12"),
+    );
+    expect(fingerprint("SELECT id FROM t WHERE a - 1 = 5")).not.toBe(
+      fingerprint("SELECT id FROM t WHERE a = 5"),
+    );
+  });
+
+  it("handles signed exponents and negative column aliases in IN lists", () => {
+    expect(fingerprint("SELECT id FROM t WHERE a IN (1e3, -2.5, +7)")).toBe(
+      fingerprint("SELECT id FROM t WHERE a IN (9, -88, 1e9)"),
+    );
+  });
   it("keeps structurally different queries apart", () => {
     expect(fingerprint("SELECT id FROM t WHERE a = 1")).not.toBe(
       fingerprint("SELECT id FROM t WHERE b = 1"),

@@ -94,20 +94,23 @@ export function maskLiterals(sql: string): string {
       continue;
     }
 
+    if (
+      (ch === "-" || ch === "+") &&
+      UNARY_CONTEXT.includes(lastMeaningful(out)) &&
+      isDigit(sql[i + 1] ?? "")
+    ) {
+      // A signed literal is one value: `-3` and `+7` must fingerprint like `3`,
+      // otherwise one query pattern splits into several fingerprints.
+      i = scanNumber(sql, i + 1);
+      out += "?";
+      continue;
+    }
+
     if (isDigit(ch) || (ch === "." && isDigit(sql[i + 1] ?? ""))) {
-      // Only treat as a number when not glued to an identifier (`t1`, `0e1` inside a name).
+      // Only treat as a number when not glued to an identifier (`t1`, `tbl_2024`).
       const prev = out[out.length - 1];
       if (!prev || !isIdentChar(prev)) {
-        while (i < sql.length && (isDigit(sql[i]!) || sql[i] === ".")) i += 1;
-        // scientific notation: 1e10, 1E+10, 1.5e-3
-        if (sql[i] === "e" || sql[i] === "E") {
-          const sign = sql[i + 1];
-          const afterSign = sign === "+" || sign === "-" ? sql[i + 2] : undefined;
-          if (isDigit(sql[i + 1] ?? "") || (afterSign !== undefined && isDigit(afterSign))) {
-            i += sign === "+" || sign === "-" ? 3 : 2;
-            while (i < sql.length && isDigit(sql[i]!)) i += 1;
-          }
-        }
+        i = scanNumber(sql, i);
         out += "?";
         continue;
       }
@@ -125,8 +128,33 @@ function collapseInLists(sql: string): string {
   return sql.replace(/\bin\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/gi, "IN (?)");
 }
 
+/** Characters after which a minus sign can only be unary, so `-1` is one literal. */
+const UNARY_CONTEXT = "=<>(),!+-*/";
+
+function lastMeaningful(text: string): string {
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    const ch = text[i]!;
+    if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") return ch;
+  }
+  return "";
+}
+
 function isDigit(ch: string): boolean {
   return ch >= "0" && ch <= "9";
+}
+
+function scanNumber(sql: string, start: number): number {
+  let i = start;
+  while (i < sql.length && (isDigit(sql[i]!) || sql[i] === ".")) i += 1;
+  if (sql[i] === "e" || sql[i] === "E") {
+    const sign = sql[i + 1];
+    const afterSign = sign === "+" || sign === "-" ? sql[i + 2] : undefined;
+    if (isDigit(sql[i + 1] ?? "") || (afterSign !== undefined && isDigit(afterSign))) {
+      i += sign === "+" || sign === "-" ? 3 : 2;
+      while (i < sql.length && isDigit(sql[i]!)) i += 1;
+    }
+  }
+  return i;
 }
 
 function isIdentChar(ch: string): boolean {

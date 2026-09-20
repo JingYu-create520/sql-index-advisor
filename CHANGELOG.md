@@ -47,7 +47,7 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   build red.
 - `examples/schema-dump.sql` — pure `information_schema` query to produce
   `schema.json` without the tool ever connecting to a database.
-- Test suite: 185 tests covering parser snapshots, one positive and one negative
+- Test suite: 206 tests, including an adversarial corpus (~1,200 generated statements plus malformed input) asserting the invariants that must hold for any input: no crash, no index on a non-existent column, no prefix-redundant advice, byte-identical output on repeat runs. Covering parser snapshots, one positive and one negative
   case per rule, degradation on malformed input, report formats, and a real
   stdio JSON-RPC handshake against the built MCP bundle.
 - Docs: bilingual README and `docs/rules.md` recording each rule's trigger,
@@ -71,6 +71,13 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   accepts both, and the live dump is kept as a test fixture.
 - `workspaceRelative` treated a backslash as a separator on every platform, breaking
   workspace-relative PR annotations on Linux runners.
+- The tokenizer split `1e999` into the number `1` plus a word token `e999`, so the
+  parser read `e999` as a column name and could propose indexing it. Scientific
+  notation without a sign is now consumed as one number.
+- Signed literals were not folded into a single placeholder: `a = -3` masked to
+  `a=-?` while `a = 3` gave `a=?`, splitting one query pattern across two
+  fingerprints and weakening exactly the aggregation the slow-log report depends
+  on. `+7` had the same defect.
 - The CI smoke step inherited the runner's `bash -e`, so the CLI's legitimate exit
   code 1 killed the step before it could be judged — and its assertions lacked
   `|| exit 1`, so a broken check could have passed silently.
