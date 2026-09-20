@@ -7,11 +7,18 @@ import { ruleById } from "../rules/registry.js";
 /**
  * GitHub resolves annotation `file=` against the runner workspace, so an
  * absolute path would silently produce a comment that links to nothing.
+ *
+ * Backslash only counts as a separator on Windows; on POSIX it is a legal
+ * character inside a file name, so we must not rewrite it there.
  */
 export function workspaceRelative(file: string): string {
-  const rel = relative(process.cwd(), file).replace(/\\/g, "/");
-  // Outside the workspace (or the same path) -> keep the original.
-  if (!rel || rel.startsWith("../") || rel === "." || rel.length >= file.length) return file;
+  const onWindows = process.platform === "win32";
+  const target = onWindows ? file.replace(/\\/g, "/") : file;
+  const base = onWindows ? process.cwd().replace(/\\/g, "/") : process.cwd();
+  const rel = relative(base, target).replace(/\\/g, "/");
+
+  // Outside the workspace, unresolvable, or not actually shorter: keep the original.
+  if (!rel || rel.startsWith("../") || rel === "." || rel.length >= target.length) return file;
   return rel;
 }
 

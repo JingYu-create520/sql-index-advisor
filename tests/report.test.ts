@@ -121,15 +121,26 @@ describe("github report", () => {
 
   it("rewrites workspace paths so annotations actually link", async () => {
     const { workspaceRelative } = await import("../src/report/github.js");
-    expect(workspaceRelative(process.cwd() + "/src/cli.ts")).toBe("src/cli.ts");
-    expect(workspaceRelative(process.cwd() + "\\src\\cli.ts")).toBe("src/cli.ts");
+    expect(workspaceRelative(`${process.cwd()}/src/cli.ts`)).toBe("src/cli.ts");
     // Anything outside the workspace stays untouched rather than becoming ../..
     expect(workspaceRelative("/var/log/mysql/slow.log")).toBe("/var/log/mysql/slow.log");
+    expect(workspaceRelative(process.cwd())).toBe(process.cwd());
     const line = annotation(
       synthetic({ source: { file: `${process.cwd()}/m/UserMapper.xml`, line: 7 } }),
     );
     expect(line).toContain("file=m/UserMapper.xml");
   });
+
+  // A backslash is only a separator on Windows; on POSIX it is a legal byte in a
+  // file name, so this case must not be asserted there.
+  it(
+    "normalises Windows separators in workspace paths",
+    { skip: process.platform !== "win32" },
+    async () => {
+      const { workspaceRelative } = await import("../src/report/github.js");
+      expect(workspaceRelative(`${process.cwd()}\\src\\cli.ts`)).toBe("src/cli.ts");
+    },
+  );
 });
 
 describe("migration report", () => {
