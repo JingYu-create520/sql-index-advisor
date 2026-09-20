@@ -1,0 +1,14 @@
+# Normalise line endings so a Windows checkout and a Linux CI runner produce the
+# same bytes. Without this, every contributor on Windows shows up with whole-file
+# diffs, and snapshot tests can drift on newline alone.
+* text=auto eol=lf
+
+# Genuinely binary: never touch the bytes.
+*.png binary
+*.gif binary
+*.jpg binary
+*.ico binary
+
+# Windows-only files keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
