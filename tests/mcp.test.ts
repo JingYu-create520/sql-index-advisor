@@ -68,10 +68,10 @@ describe("MCP tool handlers", () => {
       sql: "SELECT id FROM order_item WHERE sku_id = 1; SELECT id FROM order_item WHERE sku_id = 2;",
       emitSql: true,
     }).content[0]!.text;
-    expect(text).toContain("迁移 SQL");
+    expect(text).toContain("migration SQL");
     // Count only inside the migration block; the JSON payload repeats the DDL.
     const migration = text.slice(
-      text.indexOf("── 迁移 SQL ──"),
+      text.indexOf("── migration SQL ──"),
       text.indexOf("── 结构化结果 ──"),
     );
     expect(migration.match(/ALTER TABLE `order_item`/g)).toHaveLength(1);

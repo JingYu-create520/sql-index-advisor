@@ -139,7 +139,7 @@ async function emit(source: string, flags: GlobalFlags, label: string, load: { k
 
   if (flags.emitSql) {
     const target = resolve(flags.emitSql);
-    writeFileSync(target, renderMigration(result, label), "utf8");
+    writeFileSync(target, renderMigration(result, label, { lang }), "utf8");
     process.stderr.write(`${pc.green("✓")} 迁移文件已写入 ${target}\n`);
   }
 

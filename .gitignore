@@ -15,3 +15,7 @@ live-schema.json
 sia-report.json
 sia-annotations.txt
 sia-migrations.sql
+
+# Regeneration scratch files
+/demo-terminal.html
+/demo-migrations.sql

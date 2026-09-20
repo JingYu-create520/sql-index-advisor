@@ -118,7 +118,7 @@ export function toolResult(
     `${result.records} 个查询指纹`,
     ...(skipped ? [skipped] : []),
     ...(result.errors.map((e) => `规则异常：${e}`) ?? []),
-    ...(options.emitSql ? ["", "── 迁移 SQL ──", renderMigration(result, source)] : []),
+    ...(options.emitSql ? ["", "── migration SQL ──", renderMigration(result, source, { lang: "en" })] : []),
     "",
     "── 结构化结果 ──",
     JSON.stringify(report, null, 2),

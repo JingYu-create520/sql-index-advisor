@@ -4,7 +4,12 @@
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
+![Terminal output: three findings with rule IDs, evidence SQL, a rewrite and the emitted migration file](docs/assets/terminal-demo.png)
+
 Deterministic rules produce every conclusion — reproducible, unit-tested, and **no API key required**. The LLM is an optional layer that polishes the explanation text; it can never add, remove or re-rank a finding.
+
+<details>
+<summary>Same output as text (copy-pasteable)</summary>
 
 ```console
 $ sia examples/slow.log --schema examples/schema.json
@@ -21,7 +26,19 @@ $ sia examples/slow.log --schema examples/schema.json
    DDL     ALTER TABLE `user_address` ADD INDEX `idx_user_address_city_user_id` (`city`, `user_id`);
 
 Review every suggestion before running it; this tool never touches the database.
+
+$ sia examples/slow.log --schema examples/schema.json --emit-sql add-indexes.sql
+-- SIA001 Missing index candidate · error · 903,112 rows scanned
+ALTER TABLE `order_item` ADD INDEX `idx_order_item_order_id` (`order_id`);
+-- SIA004 Function or expression on an indexed column · error · 4,120,933 rows scanned
+ALTER TABLE `orders` ADD INDEX `idx_orders_create_time` ((DATE(create_time)));
+-- SIA001 Missing index candidate · error · 1,330,921 rows scanned
+ALTER TABLE `orders` ADD INDEX `idx_orders_shop_id_create_time` (`shop_id`, `create_time`);
+-- SIA001 Missing index candidate · warn · 2 occurrences · 1,842,930 rows scanned
+ALTER TABLE `orders` ADD INDEX `idx_orders_user_id_status_create_time` (`user_id`, `status`, `create_time`);
 ```
+
+</details>
 
 Every line above carries a **rule ID**, the **evidence SQL**, and a **DDL you can read and verify**. That is the whole design: no black box.
 

@@ -4,7 +4,12 @@
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
+![终端输出：三条建议带规则号、证据 SQL、改写语句，以及生成的迁移文件](docs/assets/terminal-demo.png)
+
 所有结论由确定性规则产生——可复现、可单测、**无需 API key**。LLM 只是可选的文案润色层，它无法新增、删除或重排任何一条建议。
+
+<details>
+<summary>同样内容的纯文本版（方便复制）</summary>
 
 ```console
 $ sia examples/slow.log --schema examples/schema.json
@@ -21,7 +26,19 @@ $ sia examples/slow.log --schema examples/schema.json
    DDL     ALTER TABLE `user_address` ADD INDEX `idx_user_address_city_user_id` (`city`, `user_id`);
 
 建议需人工评审后再执行；本工具永不自动改动数据库。
+
+$ sia examples/slow.log --schema examples/schema.json --emit-sql add-indexes.sql
+-- SIA001 缺失索引候选 · error · 扫描 903,112 行
+ALTER TABLE `order_item` ADD INDEX `idx_order_item_order_id` (`order_id`);
+-- SIA004 索引列上使用函数或运算 · error · 扫描 4,120,933 行
+ALTER TABLE `orders` ADD INDEX `idx_orders_create_time` ((DATE(create_time)));
+-- SIA001 缺失索引候选 · error · 扫描 1,330,921 行
+ALTER TABLE `orders` ADD INDEX `idx_orders_shop_id_create_time` (`shop_id`, `create_time`);
+-- SIA001 缺失索引候选 · warn · 命中 2 次 · 扫描 1,842,930 行
+ALTER TABLE `orders` ADD INDEX `idx_orders_user_id_status_create_time` (`user_id`, `status`, `create_time`);
 ```
+
+</details>
 
 上面每一行都带**规则 ID**、**证据 SQL** 和**可直接阅读的 DDL**。这就是它的设计前提：不是黑箱。
 
