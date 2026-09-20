@@ -38,10 +38,12 @@ jobs:
         run: npm test
 
       - name: Smoke test CLI
-        # No `set -e`: the CLI is expected to exit 1, and -e would abort before the
-        # exit code can be inspected. Therefore every check below ends in
-        # `|| exit 1` — otherwise a failing assertion stays silently green.
+        # GitHub runs every bash step as `bash -e`, and the CLI legitimately exits
+        # 1 when it reports findings at or above --fail-on: without `set +e` the
+        # step dies before the exit code can be inspected. Every check below ends
+        # in `|| exit 1` because -e is now off.
         run: |
+          set +e
           set -uo pipefail
 
           # 1a. With a schema: findings must appear and every DDL must be ADD INDEX only.
