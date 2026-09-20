@@ -101,7 +101,7 @@ describe("MCP tool handlers", () => {
  */
 describe("MCP stdio handshake", () => {
   const entry = resolve("dist/mcp.js");
-  const skip = !existsSync(entry);
+  const built = existsSync(entry);
 
   let child: ChildProcessWithoutNullStreams | undefined;
   const pending = new Map<number, (value: unknown) => void>();
@@ -165,7 +165,11 @@ describe("MCP stdio handshake", () => {
     });
   }
 
-  it(skip ? "skipped: run `npm run build` first" : "initialises, lists tools and calls analyze_sql", async () => {
+  // Genuinely skip when the bundle is absent (CI runs tests before build unless
+  // the workflow builds first) — a renamed test would still run and time out.
+  it.skipIf(!built)(
+    "initialises, lists tools and calls analyze_sql",
+    async () => {
     const proc = await start();
 
     const init = await request(proc, 1, "initialize", {
@@ -173,7 +177,9 @@ describe("MCP stdio handshake", () => {
       capabilities: {},
       clientInfo: { name: "vitest", version: "1" },
     });
-    if (!init) throw new Error("no initialize response; buffer=" + buffer.slice(0, 200));
+    if ((init as { timeout?: boolean }).timeout) {
+      throw new Error(`no initialize response within 15s; stdout buffer was: ${buffer.slice(0, 200)}`);
+    }
     const serverInfo = (init as { result?: { serverInfo?: { name?: string } } }).result?.serverInfo;
     expect(serverInfo?.name).toBe("sql-index-advisor");
 
@@ -202,5 +208,7 @@ describe("MCP stdio handshake", () => {
     expect(text).toContain("未参与判定的规则");
     expect(text).not.toContain("ALTER TABLE");
     expect(JSON.parse(text.split(BANNER)[1]!.trim()).findings[0].rule).toBe("SIA004");
-  });
+    },
+    30_000,
+  );
 });

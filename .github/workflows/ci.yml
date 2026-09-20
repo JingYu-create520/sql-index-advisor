@@ -29,11 +29,81 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
-
       - name: Build
         run: npm run build
 
+      # Build before test: the MCP suite spawns the real dist/mcp.js bundle for a
+      # stdio JSON-RPC handshake, and skips itself if the bundle is absent.
+      - name: Test
+        run: npm test
+
       - name: Smoke test CLI
-        run: node dist/cli.js examples/slow.log --format json | head -40
+        # No `set -e`: the CLI is expected to exit 1, and -e would abort before the
+        # exit code can be inspected. Therefore every check below ends in
+        # `|| exit 1` — otherwise a failing assertion stays silently green.
+        run: |
+          set -uo pipefail
+
+          # 1a. With a schema: findings must appear and every DDL must be ADD INDEX only.
+          node dist/cli.js examples/slow.log --schema examples/schema.json --format json > sia.json
+          code=$?
+          if [ "$code" != "0" ] && [ "$code" != "1" ]; then
+            echo "unexpected exit code: $code" >&2
+            exit 1
+          fi
+          node -e '
+            const r = require("./sia.json");
+            const rules = new Set(r.findings.map((f) => f.rule));
+            if (r.findings.length < 3) { console.error("expected findings, got " + r.findings.length); process.exit(1); }
+            if (!rules.has("SIA004")) { console.error("expected SIA004, got " + [...rules]); process.exit(1); }
+            for (const f of r.findings) {
+              for (const ddl of f.suggestedDDL) {
+                if (!/^ALTER TABLE .+ ADD (UNIQUE )?INDEX/.test(ddl)) { console.error("bad DDL: " + ddl); process.exit(1); }
+              }
+            }
+            console.log("with schema: " + r.findings.length + " findings (" + [...rules].join(",") + ")");
+          ' || exit 1
+
+          # 1b. Without a schema: silence must be explained, never shown as all-clear.
+          node dist/cli.js examples/slow.log --format json > sia-noschema.json || true
+          node -e '
+            const r = require("./sia-noschema.json");
+            const ids = r.skipped.map((s) => s.id);
+            for (const need of ["SIA002", "SIA003", "SIA005", "SIA007"]) {
+              if (!ids.includes(need)) { console.error(need + " should be reported as skipped without --schema, got: " + ids); process.exit(1); }
+            }
+            if (!r.skipped.every((s) => s.reason && s.reason.length > 3)) { console.error("skipped entry has no reason"); process.exit(1); }
+            console.log("without schema: " + r.findings.length + " findings, " + r.skipped.length + " rules explicitly skipped");
+          ' || exit 1
+
+          # 2. GitHub annotations: must be produced and workspace-relative.
+          node dist/cli.js mapper examples/mapper --format github > sia-annotations.txt
+          count=$(grep -c '^::' sia-annotations.txt || true)
+          if [ "${count:-0}" -eq 0 ]; then
+            echo "no annotations produced" >&2
+            exit 1
+          fi
+          if grep -Eq '^::[a-z]+ (title=[^,]*,)?file=([A-Za-z]:[\\/]|/)' sia-annotations.txt; then
+            echo "annotation used an absolute path; PR comments would not link" >&2
+            exit 1
+          fi
+          if ! grep -Eq '^::[a-z]+ file=[^,]+,line=[0-9]+' sia-annotations.txt; then
+            echo "annotation missing a line number" >&2
+            exit 1
+          fi
+          echo "annotations ok: $count"
+
+          # 3. Migration file: deduplicated, and never anything but ADD INDEX.
+          node dist/cli.js examples/slow.log --schema examples/schema.json --emit-sql sia-migrations.sql --format json > /dev/null || true
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync("sia-migrations.sql", "utf8").split("\n")
+              .map((l) => l.trim()).filter((l) => l && !l.startsWith("--"));
+            if (lines.length === 0) { console.error("migration file has no statements"); process.exit(1); }
+            for (const l of lines) {
+              if (!/^ALTER TABLE .+ ADD (UNIQUE )?INDEX/.test(l)) { console.error("unexpected statement: " + l); process.exit(1); }
+            }
+            const unique = new Set(lines);
+            if (unique.size !== lines.length) { console.error("duplicate DDL emitted"); process.exit(1); }
+            console.log("migration ok: " + lines.length + " deduplicated statement(s)");
+          ' || exit 1
