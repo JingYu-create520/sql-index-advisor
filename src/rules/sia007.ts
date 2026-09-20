@@ -78,6 +78,7 @@ export const sia007: Rule = {
         needsSchema: true,
         needsMetrics: true,
         table: table.name,
+        indexColumns: combined,
         suggestedDDL: [ddl],
         message: [
           `该查询扫描 ${rows.toLocaleString("en-US")} 行，但只需要 ${combined.length} 个不同列（${combined.join(", ")}）。`,

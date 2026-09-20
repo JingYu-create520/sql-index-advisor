@@ -60,10 +60,18 @@ export const sia001: Rule = {
 
       const ddl = addIndexDdl(bucket.table, usable);
       const prefixHit = table?.indexes.find((i) => i.columns[0] === usable[0]);
+      const lowCardinalityRisk = isFlagColumn(usable, table);
+      const severity: Finding["severity"] = lowCardinalityRisk
+        ? "info"
+        : table
+          ? prefixHit
+            ? "warn"
+            : "error"
+          : "info";
 
       findings.push({
         rule: RULE_ID,
-        severity: table ? (prefixHit ? "warn" : "error") : "info",
+        severity,
         sql: truncateSql(record.parsed.sql),
         fingerprint: record.fingerprint,
         source: record.source,
@@ -73,11 +81,19 @@ export const sia001: Rule = {
         needsSchema: false,
         needsMetrics: false,
         table: bucket.table,
+        indexColumns: usable,
+        lowCardinalityRisk,
         suggestedDDL: [ddl],
-        message: buildMessage(bucket, usable, dropped, table ? prefixHit : undefined),
-        messageEn: table
-          ? `No usable index for the ${bucket.table} access pattern; consider (${usable.join(", ")}).`
-          : `Candidate index for ${bucket.table} (${usable.join(", ")}); pass --schema to confirm nothing already covers it.`,
+        message: [
+          buildMessage(bucket, usable, dropped, table ? prefixHit : undefined),
+          ...(lowCardinalityRisk ? [FLAG_CAUTION] : []),
+        ].join(" "),
+        messageEn:
+          `Candidate index for ${bucket.table} (${usable.join(", ")})` +
+          (table
+            ? `; no existing index serves this access path.`
+            : `; pass --schema to confirm nothing already covers it.`) +
+          (lowCardinalityRisk ? " Low-cardinality column: check its distinct-value ratio before creating it." : ""),
       });
     }
 
@@ -173,6 +189,26 @@ function equalityAlreadyIndexed(  table: SchemaTable | undefined,
   return table.indexes.some((index) =>
     equality.every((column, position) => index.columns[position] === column),
   );
+}
+
+/**
+ * A lone boolean / flag column is the classic useless index: a few distinct
+ * values over millions of rows means the optimizer will not even pick it. We
+ * still report it — it can be legitimately rare-and-hot — but never above `info`,
+ * and with the selectivity check spelled out.
+ */
+const FLAG_NAMES = /^(is_|has_|can_|enabled?|disabled|deleted?|synced?|verified|activated?|expired?|valid|invalid|active|inactive|state|status|type|kind|flag)$/;
+
+const FLAG_CAUTION =
+  "注意：这是单列布尔/标志位，区分度可能极低，优化器未必会选它。先跑 " +
+  "SELECT COUNT(DISTINCT 列)/COUNT(*) FROM 表; 确认比值足够小再建。";
+
+function isFlagColumn(usable: string[], table: SchemaTable | undefined): boolean {
+  if (usable.length !== 1) return false;
+  const name = usable[0]!;
+  const column = table?.columns.find((c) => c.name === name);
+  if (column && ["tinyint", "bit", "boolean", "bool"].includes(column.type)) return true;
+  return FLAG_NAMES.test(name);
 }
 
 function buildMessage(

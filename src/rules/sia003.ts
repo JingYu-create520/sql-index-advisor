@@ -62,6 +62,7 @@ export const sia003: Rule = {
           needsSchema: true,
           needsMetrics: false,
           table: table.name,
+          indexColumns: wanted,
           suggestedDDL: [addIndexDdl(table.name, wanted)],
           message: [
             `索引 ${index.name}(${index.columns.join(", ")}) 只能用到前 ${run} 列（${reached.join(", ")}），`,

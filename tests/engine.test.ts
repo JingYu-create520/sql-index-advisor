@@ -115,6 +115,47 @@ describe("analyze: robustness", () => {
     expect(twice.findings).toHaveLength(once.findings.length);
   });
 
+  it("drops a narrower index that the wider one already serves", () => {
+    // Two real queries on the same table: (sku_id) is a left prefix of
+    // (sku_id, warehouse_id), so proposing both is pure write amplification.
+    const result = analyze([
+      record("SELECT quantity FROM stock WHERE sku_id = 1 AND warehouse_id = 2"),
+      record("SELECT quantity FROM stock WHERE sku_id = 1"),
+    ]);
+    const ddls = result.findings.flatMap((f) => f.suggestedDDL);
+    expect(ddls).toHaveLength(1);
+    expect(ddls[0]).toContain("(`sku_id`, `warehouse_id`)");
+    expect(ddls.join("")).not.toContain("ADD INDEX `idx_stock_sku_id` (`sku_id`)");
+    expect(result.findings[0]?.message).toContain("无需重复建");
+  });
+
+  it("keeps two indexes when neither is a prefix of the other", () => {
+    const result = analyze([
+      record("SELECT id FROM stock WHERE sku_id = 1"),
+      record("SELECT id FROM stock WHERE warehouse_id = 2"),
+    ]);
+    expect(result.findings.flatMap((f) => f.suggestedDDL)).toHaveLength(2);
+  });
+
+  it("never puts a boolean flag column above info and says why", () => {
+    const result = analyze([record("UPDATE stock SET synced = 1 WHERE synced = 0")]);
+    const finding = result.findings.find((f) => f.rule === "SIA001");
+    expect(finding?.severity).toBe("info");
+    expect(finding?.lowCardinalityRisk).toBe(true);
+    expect(finding?.message).toContain("区分度");
+  });
+
+  it("a composite starting with a flag column is not penalised", () => {
+    const result = analyze([
+      record("SELECT id FROM stock WHERE synced = 0 AND sku_id = 5"),
+    ]);
+    const finding = result.findings.find((f) => f.rule === "SIA001");
+    expect(finding?.lowCardinalityRisk).toBeFalsy();
+    // Two equality columns keep WHERE appearance order: without statistics there
+    // is no basis to claim one is more selective than the other.
+    expect(finding?.indexColumns).toEqual(["synced", "sku_id"]);
+  });
+
   it("never emits a finding without a fingerprint or rule id", () => {
     const result = analyze(
       [

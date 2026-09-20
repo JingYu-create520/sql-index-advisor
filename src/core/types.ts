@@ -157,6 +157,16 @@ export interface Finding {
   needsMetrics: boolean;
   /** Table the finding is about, when a single table applies. Used for DDL dedup. */
   table?: string;
+  /**
+   * Columns of the index this finding proposes, in order. Lets the engine drop a
+   * suggestion that is a left prefix of a wider suggestion on the same table —
+   * `(sku_id)` is noise once `(sku_id, warehouse_id)` is on the table.
+   */
+  indexColumns?: string[];
+  /** True when the suggestion is only useful after a selectivity check. */
+  lowCardinalityRisk?: boolean;
+  /** Narrower suggestions on the same table that this wider index already serves. */
+  coveredFingerprints?: string[];
 }
 
 export interface SchemaIndex {

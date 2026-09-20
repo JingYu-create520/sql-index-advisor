@@ -62,6 +62,7 @@ export const sia002: Rule = {
           needsSchema: true,
           needsMetrics: false,
           table: table.name,
+          indexColumns: [column.name],
           suggestedDDL: [
             `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(name)} (${quoteIdent(
               column.name,

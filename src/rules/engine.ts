@@ -69,7 +69,7 @@ export function analyze(records: QueryRecord[], options: AnalyzeOptions = {}): A
   }
 
   return {
-    findings: sortFindings(dedup(findings), records),
+    findings: dropRedundantPrefixes(sortFindings(dedup(findings), records)),
     records: records.length,
     analysed: records.length,
     skipped: [...skipCounts.entries()]
@@ -135,6 +135,48 @@ function sortFindings(findings: Finding[], records: QueryRecord[]): Finding[] {
     if (Math.abs(gain) > 1e-9) return gain > 0 ? 1 : -1;
     return a.rule.localeCompare(b.rule);
   });
+}
+
+/**
+ * A wider index also serves every query the narrower one could serve, so
+ * proposing both is self-inflicted noise: `(sku_id)` adds write cost for zero
+ * extra coverage once `(sku_id, warehouse_id)` is on the table. Only applies
+ * within the same run and the same table, and the survivor says what it covers.
+ */
+function dropRedundantPrefixes(findings: Finding[]): Finding[] {
+  const candidates = findings.filter((f) => (f.indexColumns?.length ?? 0) > 0);
+  const drop = new Set<Finding>();
+
+  for (const narrow of candidates) {
+    for (const wide of candidates) {
+      if (narrow === wide || narrow.table !== wide.table) continue;
+      const a = narrow.indexColumns!;
+      const b = wide.indexColumns!;
+      if (a.length >= b.length) continue;
+      if (!wide.rule.startsWith("SIA00") || !narrow.rule.startsWith("SIA00")) continue;
+      if (b.slice(0, a.length).join(",") !== a.join(",")) continue;
+      drop.add(narrow);
+      wide.coveredFingerprints = [
+        ...(wide.coveredFingerprints ?? []),
+        narrow.fingerprint,
+      ];
+      break;
+    }
+  }
+
+  if (drop.size === 0) return findings;
+
+  return findings
+    .filter((f) => !drop.has(f))
+    .map((f) =>
+      f.coveredFingerprints?.length
+        ? {
+            ...f,
+            message: `${f.message} 该索引同时覆盖另外 ${f.coveredFingerprints.length} 条查询的条件，无需重复建。`,
+            messageEn: `${f.messageEn} It also serves ${f.coveredFingerprints.length} other queried access path(s) on this table.`,
+          }
+        : f,
+    );
 }
 
 /** Same rule + same table + same DDL = the same advice, no matter how many queries asked for it. */
