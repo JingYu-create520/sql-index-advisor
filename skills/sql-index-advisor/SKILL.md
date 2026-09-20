@@ -28,9 +28,9 @@ description: 为 MySQL / MyBatis 项目做索引体检。当用户写 SQL、改 
 没有 MCP 时用 CLI：
 
 ```bash
-npx sql-index-advisor query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20" --format json
-npx sql-index-advisor /path/to/slow.log --schema schema.json --format json
-npx sql-index-advisor mapper src/main/resources/mapper --emit-sql migrations.sql --format json
+sia query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20" --format json
+sia /path/to/slow.log --schema schema.json --format json
+sia mapper src/main/resources/mapper --emit-sql migrations.sql --format json
 ```
 
 始终带 `--format json` 再自己解读，不要解析彩色表格。

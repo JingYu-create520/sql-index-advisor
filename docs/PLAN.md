@@ -28,6 +28,7 @@
 | R7 | `VARCHAR>255` 是 767 字节时代遗留;缺 MySQL 版本维度 | 中 | SIA002 阈值按**字节**计算且可配;新增 `--mysql-version`(默认 8.0),`schema.json` 携带版本;SIA004 额外给函数索引出路 |
 | R8 | Action 要发行级评论,但 M1 未要求解析器保留行号 | 中 | `mapper.ts` / `slowlog.ts` 从 M1 起就输出 `source.line` |
 | R9 | 排期乐观,自研 SQL 解析器是真实消耗点 | 提示 | M4 收窄为 **CLI + MCP 必做**,Skill + Action 移入 M6 发布周 |
+| R10 | 原计划把 CLI 发到 npm（`npx sql-index-advisor`），但发布要账号且长期多一道维护面 | 决策 | **不发 npm，只走 GitHub 直装**：`npm i -g github:JingYu-create520/sql-index-advisor`，配 `prepare` 钩子现场构建。全文命令统一为 `sia`。副作用：MCP 官方 registry 这类要求 npm 包名的收录渠道走不通，届时再单独评估 |
 
 ---
 
@@ -255,13 +256,15 @@ README 提供 Claude/Qoder/Cursor 的 `mcpServers` 一行配置 JSON。
 
 ## 12. 验收清单(项目完成 = 全部勾选)
 
-- [ ] `npm install && npm run build && npm test` 全绿
-- [ ] `npx sql-index-advisor examples/slow.log` 输出可读报告
-- [ ] `--emit-sql` 生成的迁移文件语法正确(人工 review)
-- [ ] MCP 配置在 Claude 或 Qoder 实测跑通
-- [ ] GitHub Action 在测试仓库发出行级评论
-- [ ] 双语 README + GIF + LICENSE(MIT)+ CHANGELOG
-- [ ] npm 已发布,版本 0.1.0
+- [x] `npm install && npm run build && npm test` 全绿（186 测试，CI 在 Node 18/20/22 矩阵通过）
+- [x] `sia examples/slow.log` 输出可读报告（中英两种语言实跑过）
+- [x] `--emit-sql` 生成的迁移文件已去重、只含 ADD INDEX（CI smoke 机器校验；SQL 语法仍需人工评审）
+- [x] MCP server 真 stdio JSON-RPC 握手实测通过（本机 + CI runner 各一次）
+- [ ] MCP 在 Claude / Qoder 客户端里配置跑通一次（协议层已验证，客户端侧未测）
+- [ ] GitHub Action 在靶子仓库发出行级评论
+- [x] 双语 README + CHANGELOG + LICENSE(MIT)；demo 用真实终端输出，GIF 待录
+- [x] ~~npm 已发布 0.1.0~~ → 按 R10 改为 GitHub 直装，已打 tag `v0.1.0` / `v0`
+- [ ] `examples/schema-dump.sql` 在真实 MySQL 5.7/8.0 上执行验证（本机无库，唯一未验证的技术宣称）
 - [ ] HN + 掘金 + V2EX 分发完成
 
 ## 13. 双项目总纪律(与 spring-review 共用)

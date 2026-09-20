@@ -43,6 +43,6 @@ jobs:
       # 可选：让 DBA 直接拿到可评审的迁移文件。
       - name: Emit migration SQL
         run: |
-          npx --yes sql-index-advisor src/main/resources/mapper \
+          sia src/main/resources/mapper \
             --emit-sql sia-migrations.sql --format json > /dev/null || true
           cat sia-migrations.sql || true

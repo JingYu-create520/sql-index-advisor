@@ -5,7 +5,7 @@
 所有结论由确定性规则产生——可复现、可单测、**无需 API key**。LLM 只是可选的文案润色层，它无法新增、删除或重排任何一条建议。
 
 ```console
-$ npx sql-index-advisor examples/slow.log --schema examples/schema.json
+$ sia examples/slow.log --schema examples/schema.json
 
 6 条建议  4 error  2 warn  0 info  · 覆盖 5 个查询指纹
 
@@ -43,27 +43,32 @@ English docs: [README.md](README.md)。
 
 ## 安装
 
+直接走 GitHub 安装，没有 npm 包。
+
 ```bash
-npx sql-index-advisor examples/slow.log      # 免安装直接用
-npm i -g sql-index-advisor                    # 或全局安装，命令名 `sia`
+# 装一次，命令名是 sia
+npm i -g github:JingYu-create520/sql-index-advisor
+
+# 或者不装，一次性执行
+npx --yes --package github:JingYu-create520/sql-index-advisor sia -- --help
 ```
 
-需要 Node.js ≥ 18，运行时依赖 4 个。
+需要 Node.js ≥ 18，运行时依赖 4 个，无原生编译。从 GitHub 安装时 npm 会执行 `prepare` 现场构建，所以仓库只需要打 tag，不需要提交构建产物。
 
 ## 30 秒上手
 
 ```bash
 # 1. 慢查询日志，按真实耗时排序
-npx sql-index-advisor /var/log/mysql/slow.log
+sia /var/log/mysql/slow.log
 
 # 2. 上线前先看一条 SQL
-npx sql-index-advisor query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20"
+sia query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20"
 
 # 3. 整个 MyBatis 项目，并产出可评审的迁移文件
-npx sql-index-advisor mapper src/main/resources/mapper --emit-sql migrations.sql
+sia mapper src/main/resources/mapper --emit-sql migrations.sql
 
 # 4. 给 agent 或脚本用
-npx sql-index-advisor examples/slow.log --format json
+sia examples/slow.log --format json
 ```
 
 ### 搞一个 `schema.json`（精度就靠它）
@@ -72,7 +77,7 @@ npx sql-index-advisor examples/slow.log --format json
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
-npx sql-index-advisor slow.log --schema schema.json
+sia slow.log --schema schema.json
 ```
 
 没有它，依赖现有索引的规则（`SIA002` / `SIA003` / `SIA005` / `SIA007`）会保持沉默，而且报告会明确告诉你它们为什么沉默。**沉默永远不会被报告成"没问题"。**
@@ -112,14 +117,14 @@ npx sql-index-advisor slow.log --schema schema.json
 {
   "mcpServers": {
     "sql-index-advisor": {
-      "command": "npx",
-      "args": ["-y", "sql-index-advisor", "mcp"]
+      "command": "sia",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-四个工具：`analyze_sql`、`analyze_slow_log`、`analyze_mapper`、`explain_rules`。本地仓库则用 `command: "node"` + `args: ["dist/mcp.js"]`（或 `sia-mcp`）。
+四个工具：`analyze_sql`、`analyze_slow_log`、`analyze_mapper`、`explain_rules`。不想到处全局安装就用 `command: "npx"` + `args: ["--yes", "--package", "github:JingYu-create520/sql-index-advisor", "sia", "--", "mcp"]`；本地仓库则用 `command: "node"` + `args: ["dist/mcp.js"]`（或 `sia-mcp`）。每个工具都接受内联 `schema`（JSON 文本或路径都行），所以没有文件系统的 agent 也能拿到基于现有索引的精确建议。
 
 **Agent Skill** —— `skills/sql-index-advisor/SKILL.md` 教会 agent 什么时候调用、怎么读 `Finding`、以及必须守住的红线（不代为执行 DDL、建议必须带规则号、必须把 `skipped` 说出来）。
 
@@ -142,7 +147,7 @@ npx sql-index-advisor slow.log --schema schema.json
 export SIA_LLM_BASE_URL=https://api.openai.com/v1   # 任意 OpenAI 兼容端点
 export SIA_LLM_API_KEY=sk-...
 export SIA_LLM_MODEL=gpt-4o-mini
-npx sql-index-advisor slow.log --llm
+sia slow.log --llm
 ```
 
 默认关闭：不需要 key、不联网、文案确定。开启后端点只被要求补充运维提示（"加索引前先确认这张表的写入频率"），结果落在 `finding.llmNote`。超时或 5xx 会退回内置模板，所以端点抖动不可能弄坏 CI 门禁。

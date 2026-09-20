@@ -36,9 +36,9 @@ inputs:
     required: false
     default: ""
   cli:
-    description: "CLI entry point; override to test a fork or a local build"
+    description: "CLI command to run. Default installs `sia` from GitHub in this job."
     required: false
-    default: "npx --yes sql-index-advisor"
+    default: "sia"
 
 outputs:
   report-file:
@@ -48,6 +48,13 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: "Install sql-index-advisor"
+      # Skipped when the caller supplies its own `cli`, so a fork or a local
+      # build stays usable without going through npm.
+      if: ${{ inputs.cli == 'sia' }}
+      shell: bash
+      run: npm i -g github:JingYu-create520/sql-index-advisor
+
     - name: "Collect input (guards against injecting user text into the shell)"
       id: "config"
       shell: bash

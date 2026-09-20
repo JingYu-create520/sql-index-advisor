@@ -5,7 +5,7 @@
 Deterministic rules produce every conclusion — reproducible, unit-tested, and **no API key required**. The LLM is an optional layer that polishes the explanation text; it can never add, remove or re-rank a finding.
 
 ```console
-$ npx sql-index-advisor examples/slow.log --schema examples/schema.json
+$ sia examples/slow.log --schema examples/schema.json
 
 6 suggestions  4 error  2 warn  0 info  · 5 query fingerprints covered
 
@@ -43,27 +43,34 @@ Put an endpoint behind `--llm` and it rewrites only the explanation prose. A tes
 
 ## Install
 
+Distributed straight from GitHub — there is no npm package to install.
+
 ```bash
-npx sql-index-advisor examples/slow.log          # no install needed
-npm i -g sql-index-advisor                        # or install; binary is `sia`
+# once, globally; the command is `sia`
+npm i -g github:JingYu-create520/sql-index-advisor
+
+# or run without installing
+npx --yes --package github:JingYu-create520/sql-index-advisor sia -- --help
 ```
 
-Requires Node.js ≥ 18. Four runtime dependencies, no native builds.
+Requires Node.js ≥ 18. Four runtime dependencies, no native builds. The install
+builds the bundle from source via npm's `prepare` hook, so a tagged release is
+all the repository has to ship.
 
 ## 30-second quickstart
 
 ```bash
 # 1. A slow query log, ranked by real cost
-npx sql-index-advisor /var/log/mysql/slow.log
+sia /var/log/mysql/slow.log
 
 # 2. One statement, before you ship it
-npx sql-index-advisor query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20"
+sia query "SELECT * FROM orders WHERE user_id=1 ORDER BY create_time DESC LIMIT 20"
 
 # 3. Whole MyBatis project, plus a migration file you can review
-npx sql-index-advisor mapper src/main/resources/mapper --emit-sql migrations.sql
+sia mapper src/main/resources/mapper --emit-sql migrations.sql
 
 # 4. Machine-readable, for an agent or a script
-npx sql-index-advisor examples/slow.log --format json
+sia examples/slow.log --format json
 ```
 
 ### Get a `schema.json` (this is what unlocks precision)
@@ -72,7 +79,7 @@ The tool never connects to your database. Dump the schema yourself with one quer
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
-npx sql-index-advisor slow.log --schema schema.json
+sia slow.log --schema schema.json
 ```
 
 Without it, rules that depend on existing indexes (`SIA002`, `SIA003`, `SIA005`, `SIA007`) stay silent and the report tells you so. **Silence is never reported as "all clear."**
@@ -106,20 +113,24 @@ Other flags: `--min-severity warn` · `--fail-on error` · `--top 20` · `--mysq
 
 ## Use it from an AI coding agent
 
-**MCP server** — add to `claude_desktop_config.json`, Qoder's MCP settings, or `.cursor/mcp.json`:
+**MCP server** — add to `claude_desktop_config.json`, Qoder's MCP settings, or `.cursor/mcp.json`. After the global install above, the short form is:
 
 ```json
 {
   "mcpServers": {
     "sql-index-advisor": {
-      "command": "npx",
-      "args": ["-y", "sql-index-advisor", "mcp"]
+      "command": "sia",
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-Four tools: `analyze_sql`, `analyze_slow_log`, `analyze_mapper`, `explain_rules`. From a local checkout, use `command: "node"` with `args: ["dist/mcp/index.js"]` (or the `sia-mcp` bin).
+To run it without a global install, use `command: "npx"` with
+`args: ["--yes", "--package", "github:JingYu-create520/sql-index-advisor", "sia", "--", "mcp"]`,
+or from a checkout: `command: "node"`, `args: ["dist/mcp.js"]`.
+
+Four tools: `analyze_sql`, `analyze_slow_log`, `analyze_mapper`, `explain_rules`. Every tool accepts an inline `schema` (JSON text **or** a path), so an agent with no filesystem access still gets schema-accurate advice.
 
 **Agent Skill** — `skills/sql-index-advisor/SKILL.md` teaches an agent when to call the CLI, how to read `Finding`, and the rules it must not break (never execute DDL, always carry the rule ID, always surface `skipped`).
 
@@ -142,7 +153,7 @@ Full example workflow: [`examples/github-action/pr-review.yml`](examples/github-
 export SIA_LLM_BASE_URL=https://api.openai.com/v1   # any OpenAI-compatible endpoint
 export SIA_LLM_API_KEY=sk-...
 export SIA_LLM_MODEL=gpt-4o-mini
-npx sql-index-advisor slow.log --llm
+sia slow.log --llm
 ```
 
 Off by default: no key, no network, deterministic text. When on, the endpoint is only asked for operational commentary ("verify the write rate before adding this"), which lands in `finding.llmNote`. Timeouts and 5xx errors fall back to the built-in template, so a flaky endpoint cannot break a CI gate.
