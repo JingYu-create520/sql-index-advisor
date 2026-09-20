@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.example.MetricsMapper">
+
+    <select id="byRange" resultType="map">
+        SELECT id, amount
+        FROM orders
+        WHERE create_time &gt; #{from}
+          AND create_time &lt; #{to}
+          AND status != #{excluded}
+    </select>
+
+    <select id="cdata" resultType="map">
+        SELECT id FROM orders
+        WHERE amount <![CDATA[ >= ]]> #{min}
+    </select>
+
+    <update id="trimmed">
+        UPDATE orders
+        <trim prefix="SET" suffixOverrides="," prefixOverrides="AND |OR ">
+            AND status = #{status},
+            amount = #{amount},
+        </trim>
+        WHERE id = #{id}
+    </update>
+
+    <select id="nestedChoose" resultType="map">
+        SELECT id FROM orders
+        <where>
+            <choose>
+                <when test="by == 'shop'">
+                    AND shop_id = #{value}
+                    <choose>
+                        <when test="paid">AND pay_time IS NOT NULL</when>
+                        <otherwise>AND pay_time IS NULL</otherwise>
+                    </choose>
+                </when>
+                <when test="by == 'user'">AND user_id = #{value}</when>
+                <otherwise>AND shop_id IS NULL</otherwise>
+            </choose>
+        </where>
+    </select>
+
+</mapper>

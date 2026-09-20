@@ -1,0 +1,123 @@
+name: "SQL Index Advisor"
+description: "Offline MySQL/MyBatis index review on every PR: mapper XML or slow log in, line-level annotations out."
+author: "JingYu-creates20"
+
+branding:
+  icon: "database"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Mapper XML file or directory, slow query log, or .sql file"
+    required: false
+    default: "src/main/resources"
+  schema:
+    description: "Optional schema.json path (see examples/schema-dump.sql). Unlocks SIA002/003/005/007."
+    required: false
+    default: ""
+  min-severity:
+    description: "info | warn | error"
+    required: false
+    default: "info"
+  fail-on:
+    description: "off | info | warn | error — 'off' reports annotations without failing the job"
+    required: false
+    default: "off"
+  mysql-version:
+    description: "5.7 or 8.0"
+    required: false
+    default: "8.0"
+  top:
+    description: "Maximum findings to annotate"
+    required: false
+    default: "50"
+  args:
+    description: "Extra CLI arguments, e.g. '--rules SIA001,SIA004'"
+    required: false
+    default: ""
+  cli:
+    description: "CLI entry point; override to test a fork or a local build"
+    required: false
+    default: "npx --yes sql-index-advisor"
+
+outputs:
+  report-file:
+    description: "Path to the JSON report artifact written into the workspace"
+    value: ${{ steps.report.outputs.report-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Collect input (guards against injecting user text into the shell)"
+      id: "config"
+      shell: bash
+      env:
+        SCHEMA: ${{ inputs.schema }}
+      run: |
+        schema_flag=""
+        if [ -n "${SCHEMA}" ]; then schema_flag="--schema ${SCHEMA}"; fi
+        echo "schema-flag=${schema_flag}" >> "$GITHUB_OUTPUT"
+
+    - name: "Annotate findings"
+      id: "report"
+      # The annotation step must never break a build on its own: adoption first.
+      continue-on-error: true
+      env:
+        PATH_ARG: ${{ inputs.path }}
+        SCHEMA_FLAG: ${{ steps.config.outputs.schema-flag }}
+        MIN_SEVERITY: ${{ inputs.min-severity }}
+        MYSQL_VERSION: ${{ inputs.mysql-version }}
+        TOP: ${{ inputs.top }}
+        EXTRA_ARGS: ${{ inputs.args }}
+        CLI: ${{ inputs.cli }}
+      shell: bash
+      run: |
+        set -o pipefail
+        ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
+          --format github \
+          --min-severity "${MIN_SEVERITY}" \
+          --mysql-version "${MYSQL_VERSION}" \
+          --top "${TOP}" \
+          ${EXTRA_ARGS} | tee sia-annotations.txt
+
+        ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
+          --format json \
+          --min-severity "${MIN_SEVERITY}" \
+          --mysql-version "${MYSQL_VERSION}" \
+          --top "${TOP}" \
+          ${EXTRA_ARGS} > sia-report.json || true
+
+        echo "report-file=sia-report.json" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## SQL Index Advisor"
+          echo
+          echo '```'
+          head -n 60 sia-annotations.txt | sed 's/^::\(error\|warning\|notice\) [^:]*::/• /'
+          echo '```'
+          echo
+          echo "_离线规则引擎产出，建议需人工评审后再执行。加 \`schema\` 入参可解锁依赖现有索引的规则。_"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: "Fail the job (only when fail-on is set)"
+      if: ${{ inputs.fail-on != 'off' }}
+      env:
+        PATH_ARG: ${{ inputs.path }}
+        SCHEMA_FLAG: ${{ steps.config.outputs.schema-flag }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        MYSQL_VERSION: ${{ inputs.mysql-version }}
+        EXTRA_ARGS: ${{ inputs.args }}
+        CLI: ${{ inputs.cli }}
+      shell: bash
+      run: |
+        ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
+          --format json \
+          --fail-on "${FAIL_ON}" \
+          --mysql-version "${MYSQL_VERSION}" \
+          ${EXTRA_ARGS} > /dev/null
+        code=$?
+        if [ "$code" = "1" ]; then
+          echo "::error::sql-index-advisor found issues at or above '${FAIL_ON}'. See the step summary."
+          exit 1
+        fi
+        exit 0

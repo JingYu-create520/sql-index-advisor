@@ -1,0 +1,15 @@
+# User@Host: cart[cart] @ 10.0.4.8 [10.0.4.8]  Id: 410001
+# Query_time: 0.900000  Lock_time: 0.000010 Rows_sent: 3  Rows_examined: 12000
+use shop;
+SET timestamp=1758280000;
+SELECT * FROM carts WHERE user_id = 88 AND status = 'OPEN';
+# User@Host: cart[cart] @ 10.0.4.8 [10.0.4.8]  Id: 410002
+# Query_time: 6.200000  Lock_time: 0.000020 Rows_sent: 3  Rows_examined: 900000
+SET timestamp=1758280006;
+SELECT * FROM carts WHERE user_id = 12 AND status = 'OPEN';
+# Time: 2026-09-19T11:00:00.000000Z
+# User@Host: cart[cart] @ 10.0.4.8 [10.0.4.8]  Id: 410003
+# Thread_id: 410003  Schema: shop  QC_hit: 0  Bytes_sent: 1200
+# Query_time: 3.100000  Lock_time: 0.000030 Rows_sent: 1  Rows_examined: 400000
+SET timestamp=1758280010;
+UPDATE carts SET updated_at = NOW() WHERE user_id = 5;

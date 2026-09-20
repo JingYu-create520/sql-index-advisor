@@ -1,0 +1,152 @@
+# 规则参考
+
+7 条规则，每条都有固定 ID、触发条件、输入依赖和可验证输出。工具的可信度来自这里：任何一条建议都能追溯到"哪条规则、哪个条件、什么证据"，而不是模型的语气。
+
+两条总原则：
+
+- **宁可漏报，不误报**。报错了建议会烧掉 DBA 对工具的信任，漏报只是少一条提示。
+- **永不执行**。只产出 `ALTER TABLE ... ADD INDEX` 文本和改写 SQL，人来评审、人来跑。
+
+输入依赖标记：`S` = 需要 `schema.json`；`M` = 需要慢日志的 `Rows_examined`。依赖缺失时规则被跳过，并在报告 `skipped` 里说明原因——沉默不等于通过。
+
+---
+
+## SIA001 · 缺失索引候选 · —
+
+**触发**：某张表上有等值 / IN / 范围 / 排序条件，但没有任何索引可以服务这个访问路径。
+
+**列顺序：等值 → GROUP BY / ORDER BY → 范围。** 这是本工具最核心的一条，也是最容易被写反的一条：索引一旦在某一列上做范围扫描，它后面的列既不能继续用于等值定位，也不能用于消除排序。所以把范围列排在排序列前面，等于亲手制造一次 `Using filesort`。
+
+```sql
+-- WHERE status = ? AND create_time > ? ORDER BY id
+-- 反例 (status, create_time, id)：create_time 是范围，id 排序用不上 -> filesort
+-- 正解 (status, id, create_time)：等值定位后直接按 id 有序读出
+```
+
+**不报的情况**：单列等值已经是主键或唯一键（`WHERE order_no = ? AND status = ?` 走唯一索引就已经是单行定位，再加索引只是写放大）；等值前缀已被现有索引覆盖（交给 SIA003 判断"跳过中间列"的问题，避免同一条建议出两遍）；`SELECT` 里的输出别名（`ORDER BY gmv`，gmv 是 `SUM(amount) AS gmv`，根本不是列）。
+
+**没有 schema 时**：降级为 `info` 级别的"候选"，并明说"无法确认是否已有索引覆盖，请提供 `--schema`"。
+
+## SIA002 · 前缀索引 · S
+
+**触发**：参与等值/IN/范围条件的字符串列，整列键长超过索引键预算的一半，或是 `TEXT/BLOB`。
+
+阈值按**字节**算，不按字符数。`VARCHAR > 255` 那条流传很广的经验来自 utf8mb3 + 767 字节的老限制；InnoDB 8.0 DYNAMIC 行格式的下限是 3072 字节，而 utf8mb4 一个字符要 4 字节——所以真正该问的是"这列的字符集下占多少字节"。
+
+```sql
+ALTER TABLE `orders` ADD INDEX `idx_orders_remark` (`remark`(64));
+```
+
+前缀长度不能拍脑袋。工具会附上区分度验证 SQL，让你自己确认 N 够不够：
+
+```sql
+SELECT COUNT(DISTINCT LEFT(remark, 64)) / COUNT(DISTINCT remark) AS ratio FROM orders;
+```
+
+## SIA003 · 最左前缀违反 · S
+
+**触发**：查询用到了复合索引的靠前列，跳过了中间列，却直接用了更靠后的列。
+
+这条规则存在的理由是它在 `EXPLAIN` 里**看起来是好的**：`key` 照样显示那个索引，只有 `key_len` 暴露真实用到的长度。
+
+```sql
+-- INDEX (user_id, status, create_time)
+WHERE user_id = ? AND create_time > ?     -- status 被跳过：create_time 无法缩小范围
+```
+
+**出路两条**：① 业务能补上被跳过列的条件，就补条件，现有索引立刻用满，成本为零；② 补不上就新建 `(user_id, create_time)`。选 ② 时新索引与旧索引存在写放大重叠，上线后要评估下线旧索引。
+
+## SIA004 · 索引列上使用函数或运算 · —
+
+**触发**：谓词左侧的列被函数或算术包住了（`DATE(create_time) = ?`、`YEAR(t) = 2026`、`amount + 1 = ?`、`LEFT(code,3) = ?`）。索引里存的是原值，不是函数结果，所以该列索引完全用不上。
+
+优先改写，因为改写不占存储：
+
+```sql
+WHERE DATE(create_time) = '2026-09-17'
+-- -> WHERE create_time >= '2026-09-17 00:00:00' AND create_time < '2026-09-18 00:00:00'
+```
+
+日期边界一律**左闭右开**。用 `<= '2026-09-17 23:59:59'` 会漏掉那一秒内的多值与更高精度时间，是这类改写最常见的翻车点。
+
+MySQL 8.0 另一条路是函数索引：
+
+```sql
+ALTER TABLE `orders` ADD INDEX `idx_orders_create_time` ((DATE(create_time)));
+```
+
+注意查询必须写成**完全相同**的表达式才能命中，而且 5.7 不支持——工具会按 `--mysql-version` 决定给不给这条 DDL。
+
+## SIA005 · 隐式类型转换 · S
+
+**触发**：**字符串列** = **数字字面量**。MySQL 的规则是把列侧转成数字再比较，等于对整列套函数，索引直接失效（`type=ALL`）。
+
+方向很重要，反方向不报：`int_col = '123'` 转换发生在常量侧，只做一次，索引照常可用。报它就是误报。
+
+```sql
+WHERE mobile = 13800000000    -- -> WHERE mobile = '13800000000'
+```
+
+**已知边界**：绑定参数（`mobile = ?`）看不出 Java 侧的实际类型，所以静态判不了。MyBatis 项目里真正危险的是 DTO 把手机号声明成 `Long`——那属于 spring-review 那一类静态检查的活，这里不越界猜测。
+
+## SIA006 · 深分页 · —
+
+**触发**：`LIMIT` 的偏移量是**字面量**且超过阈值（默认 10000）。`LIMIT 100000, 20` 仍要扫描并丢弃前 10 万行。
+
+只判字面量是刻意的：MyBatis 的 `LIMIT #{offset}, #{size}` 归一化成 `?, ?` 之后，静态无从知道 offset 有多大，硬猜就是误报。要看这类语句的实际分页深度，请把慢日志拿进来。
+
+两条出路：
+
+```sql
+-- ① 延迟关联：先在索引里翻主键，再回表取整行
+SELECT o.* FROM (
+  SELECT `id` FROM `orders` WHERE user_id = 1 ORDER BY id DESC LIMIT 100000, 20
+) AS page JOIN `orders` o ON o.`id` = page.`id` ORDER BY o.id DESC;
+
+-- ② 游标 / seek：用上一页最后一行的排序键替代偏移量
+WHERE (o.`create_time` < ? OR (o.`create_time` = ? AND o.`id` < ?)) ORDER BY o.create_time DESC LIMIT 20;
+```
+
+改写语句里的 WHERE / ORDER BY 是从原句**逐字搬过来**的，不是从解析结果重建的——重建会悄悄丢掉解析器无法归类的条件，而"改写后结果集变了"比不改写糟糕得多。遇到含相关子查询的语句，工具降级为只给模板、不给可执行改写。多表 FROM 的深分页同样不做具体改写。
+
+## SIA007 · 覆盖索引机会 · S M
+
+**触发**：慢日志显示扫描行数很高（默认 ≥10000），投影列明确（不是 `SELECT *`），谓词已经有可用索引，但投影列不在索引里——每一行都要回表读聚簇索引。
+
+把投影列并进去，`Extra` 里就会出现 `Using index`，回表的随机 IO 直接消失：
+
+```sql
+-- 现有 INDEX (user_id, status, create_time)
+SELECT amount FROM orders WHERE user_id = ?
+-- -> ALTER TABLE `orders` ADD INDEX ... (`user_id`, `status`, `create_time`, `amount`);
+```
+
+这是最贵的一条建议：索引变宽意味着写放大和空间都涨。所以它同时要求 schema 和慢日志指标——只在"真的观测到扫描压力"时才开口，并且明确列出新增列，让你能判断这些列上的更新频率。超过 5 列或含 `TEXT` 一律不报。
+
+---
+
+## 输出结构
+
+```ts
+interface Finding {
+  rule: string;           // "SIA001"
+  severity: "error" | "warn" | "info";
+  sql: string;            // 证据 SQL（截断到 200 字符）
+  fingerprint: string;    // 归一化指纹，用于聚合与去重
+  source?: { file: string; line: number };
+  queryTime?: number;
+  rowsExamined?: number;
+  occurrences?: number;
+  message: string;        // 中文原理说明
+  messageEn: string;      // 英文摘要
+  llmNote?: string;       // 仅 --llm 追加，不参与任何判定
+  suggestedDDL: string[]; // 只有 ADD INDEX，永不出现 DROP
+  rewrite?: string;
+  needsSchema: boolean;
+  needsMetrics: boolean;
+}
+```
+
+## 排序
+
+终端与 JSON 报告先按严重度，再按预估收益：`总耗时 × 扫描行数 × 命中次数`。慢日志输入下这就是"本周最该修的三条"；没有慢日志指标时退化为按严重度排列。

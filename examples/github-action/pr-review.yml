@@ -1,0 +1,48 @@
+# Example: run sql-index-advisor on every pull request that touches a Mapper XML.
+#
+# Copy this into YOUR repository at .github/workflows/sql-index-advisor.yml
+# (it is only an example inside this repo, so it does not run here).
+
+name: SQL Index Advisor
+
+on:
+  pull_request:
+    paths:
+      - "**/mapper/**/*.xml"
+      - "src/main/resources/**/*.xml"
+
+permissions:
+  contents: read
+  pull-requests: comment
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 行级评论：mapper 目录扫一遍，结果以 ::warning file=...,line=... 注解发出。
+      # fail-on: off => 只提示，不卡构建；想要门禁时改成 error。
+      - name: Index review
+        uses: JingYu-creates20/sql-index-advisor@v0
+        with:
+          path: src/main/resources/mapper
+          min-severity: warn
+          mysql-version: "8.0"
+          fail-on: "off"
+
+      # 可选：把完整 JSON 报告留成产物，方便 agent 或人工复核。
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sia-report
+          path: sia-report.json
+          if-no-files-found: ignore
+
+      # 可选：让 DBA 直接拿到可评审的迁移文件。
+      - name: Emit migration SQL
+        run: |
+          npx --yes sql-index-advisor src/main/resources/mapper \
+            --emit-sql sia-migrations.sql --format json > /dev/null || true
+          cat sia-migrations.sql || true

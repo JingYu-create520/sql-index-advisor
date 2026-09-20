@@ -1,0 +1,53 @@
+/usr/sbin/mysqld, Version: 8.0.36-0ubuntu0.22.04.1 ((Ubuntu)). started with:
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+# Time: 2026-09-18T02:11:03.482913Z
+# User@Host: app[app] @ 10.0.3.12 [10.0.3.12]  Id: 218844
+# Query_time: 3.217443  Lock_time: 0.000145 Rows_sent: 20  Rows_examined: 1842930
+SET timestamp=1758161463;
+SELECT o.*
+FROM orders o
+WHERE o.user_id = 42 AND o.status = 'PAID'
+ORDER BY o.create_time DESC
+LIMIT 20;
+# Time: 2026-09-18T02:11:09.120001Z
+# User@Host: app[app] @ 10.0.3.12 [10.0.3.12]  Id: 218844
+# Query_time: 2.998120  Lock_time: 0.000102 Rows_sent: 20  Rows_examined: 1799102
+SET timestamp=1758161469;
+SELECT o.*
+FROM orders o
+WHERE o.user_id = 7 AND o.status = 'PAID'
+ORDER BY o.create_time DESC
+LIMIT 20;
+# Time: 2026-09-18T02:12:41.881233Z
+# User@Host: batch[batch] @ localhost []  Id: 218910
+# Query_time: 7.441201  Lock_time: 0.000210 Rows_sent: 20  Rows_examined: 4120933
+SET timestamp=1758161561;
+SELECT id, user_id, amount FROM orders WHERE DATE(create_time) = '2026-09-17' LIMIT 100000, 20;
+# Time: 2026-09-18T02:14:02.551002Z
+# User@Host: app[app] @ 10.0.3.31 [10.0.3.31]  Id: 219001
+# Query_time: 1.882013  Lock_time: 0.000051 Rows_sent: 1  Rows_examined: 903112
+SET timestamp=1758161642;
+SELECT COUNT(*) FROM order_item WHERE order_id IN (12001, 12002, 12003, 12004);
+# Time: 2026-09-18T02:15:11.998231Z
+# User@Host: app[app] @ 10.0.3.31 [10.0.3.31]  Id: 219007
+# Query_time: 5.001442  Lock_time: 0.000330 Rows_sent: 312  Rows_examined: 2881004
+SET timestamp=1758161711;
+SELECT u.id, u.name, u.mobile FROM users u
+  LEFT JOIN user_address a ON a.user_id = u.id
+  WHERE a.city = 'Hangzhou' AND u.level = 3;
+# Time: 2026-09-18T02:16:00.112233Z
+# User@Host: app[app] @ 10.0.3.12 [10.0.3.12]  Id: 219020
+# Query_time: 0.401233  Lock_time: 0.000020 Rows_sent: 1  Rows_examined: 204118
+SET timestamp=1758161760;
+# administrator command: Quit;
+# Time: 2026-09-18T02:17:31.882120Z
+# User@Host: app[app] @ 10.0.3.44 [10.0.3.44]  Id: 219055
+# Query_time: 2.410019  Lock_time: 0.000122 Rows_sent: 25  Rows_examined: 1330921
+SET timestamp=1758161851;
+SELECT /* report=weekly-gmv */ shop_id, SUM(amount) AS gmv
+FROM orders
+WHERE create_time >= '2026-09-01' AND create_time < '2026-09-08'
+GROUP BY shop_id
+ORDER BY gmv DESC
+LIMIT 25;

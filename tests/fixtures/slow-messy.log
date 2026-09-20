@@ -1,0 +1,27 @@
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+# Time: 2026-09-19T12:00:00.000000Z
+# User@Host: root[root] @ localhost []  Id: 500001
+# Query_time: 8.800000  Lock_time: 0.000000 Rows_sent: 0  Rows_examined: 0
+SET timestamp=1758283200;
+# administrator command: Quit;
+# Time: 2026-09-19T12:00:10.000000Z
+# User@Host: app[app] @ 10.0.9.9 [10.0.9.9]  Id: 500002
+# Query_time: 12.340000  Lock_time: 0.000400 Rows_sent: 20  Rows_examined: 7700000
+SET timestamp=1758283210;
+SELECT
+  o.id,
+  o.amount,
+  /* report team */ oi.sku_id
+FROM orders o
+  JOIN order_item oi ON oi.order_id = o.id
+WHERE o.shop_id = 77
+  AND o.create_time >= '2026-01-01'
+ORDER BY o.create_time DESC
+LIMIT 500000, 20;
+# Time: 2026-09-19T12:00:20.000000Z
+# User@Host: app[app] @ 10.0.9.9 [10.0.9.9]  Id: 500003
+# Query_time: 1.000000  Lock_time: 0.000000 Rows_sent: 0  Rows_examined: 0
+SET timestamp=1758283220;
+-- a leading comment line, statement left unterminated on purpose
+SELECT id FROM broken WHERE

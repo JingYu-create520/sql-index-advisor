@@ -1,0 +1,69 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parseSql: snapshot > locks the shape of a representative order-listing query 1`] = `
+{
+  "columns": [
+    {
+      "column": "user_id",
+      "op": "=",
+      "parameterized": false,
+      "predicateText": "o.user_id = 42",
+      "raw": "o.user_id",
+      "scope": "where-eq",
+      "table": "o",
+      "valueText": "42",
+    },
+    {
+      "column": "status",
+      "op": "=",
+      "parameterized": false,
+      "predicateText": "o.status = 'PAID'",
+      "raw": "o.status",
+      "scope": "where-eq",
+      "table": "o",
+      "valueText": "'PAID'",
+    },
+    {
+      "column": "amount",
+      "op": ">",
+      "parameterized": false,
+      "predicateText": "o.amount > 100",
+      "raw": "o.amount",
+      "scope": "where-range",
+      "table": "o",
+      "valueText": "100",
+    },
+  ],
+  "fingerprint": "select o.* from orders o where o.user_id=? and o.status=? and o.amount>? order by o.create_time desc limit ?",
+  "groupBy": [],
+  "kind": "select",
+  "limit": {
+    "literal": true,
+    "raw": "20",
+    "rowCount": 20,
+  },
+  "notes": [],
+  "orderBy": [
+    {
+      "column": "create_time",
+      "desc": true,
+      "raw": "o.create_time",
+      "scope": "order-by",
+      "table": "o",
+    },
+  ],
+  "orderByText": "o.create_time DESC",
+  "selectAliases": [],
+  "selectColumns": [],
+  "selectStar": true,
+  "sql": "SELECT o.* FROM orders o WHERE o.user_id = 42 AND o.status = 'PAID' AND o.amount > 100 ORDER BY o.create_time DESC LIMIT 20",
+  "tables": [
+    {
+      "alias": "o",
+      "name": "orders",
+      "role": "FROM",
+    },
+  ],
+  "whereText": "o.user_id = 42 AND o.status = 'PAID' AND o.amount > 100",
+}
+`;

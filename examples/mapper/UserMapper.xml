@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.order.mapper.UserMapper">
+
+    <sql id="baseColumns">
+        u.id, u.mobile, u.name, u.level
+    </sql>
+
+    <!-- 列表查询：动态条件，索引体检的主要目标 -->
+    <select id="selectPage" resultType="com.example.order.dto.UserDTO">
+        SELECT
+        <include refid="baseColumns"/>
+        FROM users u
+        <where>
+            <if test="level != null">
+                AND u.level = #{level}
+            </if>
+            <if test="city != null and city != ''">
+                AND EXISTS (SELECT 1 FROM user_address a WHERE a.user_id = u.id AND a.city = #{city})
+            </if>
+            <if test="start != null">
+                AND u.create_time &gt;= #{start}
+            </if>
+            <choose>
+                <when test="sort == 'time'">
+                    ORDER BY u.create_time DESC
+                </when>
+                <otherwise>
+                    ORDER BY u.id DESC
+                </otherwise>
+            </choose>
+        </where>
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="selectShopGmv" resultType="map">
+        SELECT o.shop_id, SUM(o.amount) AS gmv
+        FROM orders o
+        WHERE o.status = #{status}
+          AND o.create_time BETWEEN #{from} AND #{to}
+        GROUP BY o.shop_id
+        ORDER BY gmv DESC
+        LIMIT 100000, 20
+    </select>
+
+    <select id="countByMobiles" resultType="long">
+        SELECT COUNT(*) FROM users u
+        WHERE u.mobile IN
+        <foreach collection="mobiles" item="m" open="(" close=")" separator=",">
+            #{m}
+        </foreach>
+    </select>
+
+    <select id="searchByRemark" resultType="long">
+        SELECT COUNT(*) FROM orders o
+        WHERE o.remark = ${keyword}
+          AND DATE(o.create_time) = #{day}
+    </select>
+
+    <update id="updateStatus">
+        UPDATE orders
+        <set>
+            status = #{status},
+            <if test="payTime != null">pay_time = #{payTime},</if>
+        </set>
+        WHERE id = #{id} AND user_id = #{userId}
+    </update>
+
+    <insert id="batchInsert">
+        INSERT INTO order_item (order_id, sku_id, quantity, price)
+        VALUES
+        <foreach collection="items" item="it" separator=",">
+            (#{it.orderId}, #{it.skuId}, #{it.quantity}, #{it.price})
+        </foreach>
+    </insert>
+
+    <delete id="deleteStale">
+        DELETE FROM order_item
+        WHERE order_id = #{orderId}
+          AND quantity = 0
+    </delete>
+
+</mapper>

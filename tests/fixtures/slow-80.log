@@ -1,0 +1,18 @@
+/usr/sbin/mysqld, Version: 8.0.36 (MySQL Community Server - GPL). started with:
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+# Time: 2026-09-19T10:00:01.100000Z
+# User@Host: app[app] @ 10.0.3.12 [10.0.3.12]  Id: 300001
+# Query_time: 1.500000  Lock_time: 0.000100 Rows_sent: 10  Rows_examined: 100000
+SET timestamp=1758276001;
+SELECT id FROM products WHERE category_id = 5 ORDER BY score DESC LIMIT 10;
+# Time: 2026-09-19T10:00:05.200000Z
+# User@Host: app[app] @ 10.0.3.12 [10.0.3.12]  Id: 300002
+# Query_time: 2.500000  Lock_time: 0.000200 Rows_sent: 10  Rows_examined: 200000
+SET timestamp=1758276005;
+SELECT id FROM products WHERE category_id = 9 ORDER BY score DESC LIMIT 10;
+# Time: 2026-09-19T10:00:09.300000Z
+# User@Host: report[report] @ localhost []  Id: 300003
+# Query_time: 4.000000  Lock_time: 0.000300 Rows_sent: 1  Rows_examined: 500000
+SET timestamp=1758276009;
+SELECT COUNT(*) FROM products WHERE brand_name LIKE 'Sam%';

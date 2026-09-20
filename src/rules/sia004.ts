@@ -1,0 +1,172 @@
+/**
+ * SIA004 — a function or expression sits on the indexed column.
+ *
+ * `WHERE DATE(create_time) = '2026-09-17'` cannot use an index on create_time:
+ * the index stores raw datetimes, not the function's output. Two ways out, and
+ * we prefer the rewrite because it costs no storage (docs/PLAN.md R7).
+ */
+
+import type { ColumnRef, Finding, Rule, RuleContext } from "../core/types.js";
+import {
+  bucketByTable,
+  formatDate,
+  indexName,
+  parseDateLiteral,
+  quoteIdent,
+  truncateSql,
+} from "./helpers.js";
+import { findTable } from "../schema/loader.js";
+
+const RULE_ID = "SIA004";
+
+interface Rewrite {
+  predicate: string;
+  why: string;
+}
+
+export const sia004: Rule = {
+  id: RULE_ID,
+  title: "索引列上使用函数或运算",
+  titleEn: "Function or expression on an indexed column",
+  needsSchema: false,
+  needsMetrics: false,
+  run(ctx: RuleContext): Finding[] {
+    const { record, schema, options } = ctx;
+    const findings: Finding[] = [];
+
+    for (const bucket of bucketByTable(record.parsed, schema)) {
+      const table = findTable(schema, bucket.table);
+      for (const ref of dedupe(bucket.wrapped)) {
+        const rewrite = buildRewrite(ref);
+        const functionalDdl =
+          options.mysqlVersion >= 8 && table
+            ? [
+                `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(
+                  indexName(table.name, [ref.column]),
+                )} ((${ref.raw}));`,
+              ]
+            : [];
+
+        findings.push({
+          rule: RULE_ID,
+          severity: rewrite ? "error" : "warn",
+          sql: truncateSql(record.parsed.sql),
+          fingerprint: record.fingerprint,
+          source: record.source,
+          queryTime: record.metrics?.queryTime,
+          rowsExamined: record.metrics?.rowsExamined,
+          occurrences: record.occurrences,
+          needsSchema: false,
+          needsMetrics: false,
+          table: bucket.table,
+          suggestedDDL: functionalDdl,
+          rewrite: rewrite?.predicate,
+          message: [
+            `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
+            rewrite ? `改写方案：${rewrite.predicate} —— ${rewrite.why}` : "该表达式没有等价改写形式，可考虑函数索引。",
+            ...(options.mysqlVersion >= 8
+              ? [`MySQL 8.0 可用函数索引 ((${ref.raw})) 直接索引表达式结果，但查询必须写成完全相同的表达式才能命中；5.7 不支持。`]
+              : [`MySQL 5.7 不支持函数索引，只能改写查询。`]),
+            functionalDdl.length === 0 && !rewrite ? "当前输入未提供 --schema 或版本低于 8.0，未生成 DDL。" : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          messageEn: `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use; rewrite as a range or add a functional index.`,
+        });
+      }
+    }
+
+    return findings;
+  },
+};
+
+function dedupe(refs: ColumnRef[]): ColumnRef[] {
+  const seen = new Set<string>();
+  const out: ColumnRef[] = [];
+  for (const ref of refs) {
+    const key = ref.predicateText ?? ref.raw;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
+}
+
+/**
+ * Turn the wrapped predicate into a sargable range. Only the shapes we can prove
+ * equivalent are rewritten; everything else stays a warning.
+ */
+function buildRewrite(ref: ColumnRef): Rewrite | undefined {
+  const raw = ref.raw ?? "";
+  const value = (ref.valueText ?? "?").trim();
+
+  const dateCall = /^DATE\(\s*([\w.`]+)\s*\)$/i.exec(raw);
+  const day = dateCall && value !== "?" ? parseDateLiteral(value) : null;
+  if (dateCall && ref.op === "=") {
+    const target = dateCall[1]!;
+    if (day) {
+      const next = new Date(day.getTime() + 24 * 3600 * 1000);
+      return {
+        predicate: `${target} >= '${formatDate(day)}' AND ${target} < '${formatDate(next)}'`,
+        why: "按天等值等价于左闭右开区间，可命中该列索引",
+      };
+    }
+    return {
+      predicate: `${target} >= ? AND ${target} < DATE_ADD(?, INTERVAL 1 DAY)`,
+      why: "绑定参数为日期时同样可改写为区间；注意两个 ? 传同一个值",
+    };
+  }
+
+  const yearCall = /^YEAR\(\s*([\w.`]+)\s*\)$/i.exec(raw);
+  if (yearCall && ref.op === "=") {
+    const target = yearCall[1]!;
+    const yearValue = /^\d{4}$/.test(value.replace(/'/g, "")) ? Number(value.replace(/'/g, "")) : null;
+    if (yearValue) {
+      return {
+        predicate: `${target} >= '${yearValue}-01-01 00:00:00' AND ${target} < '${yearValue + 1}-01-01 00:00:00'`,
+        why: "按年等值等价于该年左闭右开区间",
+      };
+    }
+    return {
+      predicate: `${target} >= MAKEDATE(YEAR(?), 1) AND ${target} < MAKEDATE(YEAR(?) + 1, 1)`,
+      why: "参数化场景改写为区间",
+    };
+  }
+
+  const leftCall = /^LEFT\(\s*([\w.`]+)\s*,\s*(\d+)\s*\)$/i.exec(raw);
+  if (leftCall && ref.op === "=") {
+    const target = leftCall[1]!;
+    if (value !== "?") {
+      const escaped = value.slice(1, -1).replace(/[%_]/g, (c) => `\\${c}`);
+      return {
+        predicate: `${target} LIKE '${escaped}%'`,
+        why: "取前缀后等值等价于前缀 LIKE，右前缀 LIKE 可用索引",
+      };
+    }
+    return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "前缀匹配改写" };
+  }
+
+  // `col + 1 = 5` / `col * 2 > 10`: move the arithmetic to the right-hand side.
+  const arithmetic = /^([\w.`]+)\s*([+\-])\s*(\d+(?:\.\d+)?)$/i.exec(raw);
+  if (arithmetic && ref.op && ["=", ">", "<", ">=", "<=", "!=", "<>"].includes(ref.op)) {
+    const [, colPart, sign, numPart] = arithmetic;
+    const rhs = numericToOtherSide(sign === "+" ? "-" : "+", numPart!, value);
+    if (rhs) {
+      return {
+        predicate: `${colPart} ${ref.op} ${rhs}`,
+        why: "把运算移到右边，左边保持裸列",
+      };
+    }
+  }
+
+  // Still worth offering the substitution even when we cannot compute a range.
+  return undefined;
+}
+
+function numericToOtherSide(sign: string, offset: string, value: string): string | undefined {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return value === "?" ? `? ${sign} ${offset}` : undefined;
+  }
+  return String(sign === "-" ? numeric - Number(offset) : numeric + Number(offset));
+}

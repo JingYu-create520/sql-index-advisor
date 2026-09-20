@@ -1,0 +1,32 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parseSlowLog: snapshot > locks the aggregated shape 1`] = `
+[
+  {
+    "fp": "select id from products where category_id=? order by score desc limit ?",
+    "line": 8,
+    "occurrences": 2,
+    "tables": [
+      {
+        "alias": undefined,
+        "name": "products",
+        "role": "FROM",
+      },
+    ],
+    "total": 4,
+  },
+  {
+    "fp": "select count(*)from products where brand_name like ?",
+    "line": 18,
+    "occurrences": 1,
+    "tables": [
+      {
+        "alias": undefined,
+        "name": "products",
+        "role": "FROM",
+      },
+    ],
+    "total": 4,
+  },
+]
+`;

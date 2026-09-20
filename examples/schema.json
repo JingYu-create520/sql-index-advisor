@@ -1,0 +1,78 @@
+{
+  "mysqlVersion": "8.0.36",
+  "tables": [
+    {
+      "name": "orders",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 4200000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "user_id", "type": "bigint", "nullable": false },
+        { "name": "shop_id", "type": "bigint", "nullable": false },
+        { "name": "order_no", "type": "varchar", "length": 64, "nullable": false, "charset": "utf8mb4" },
+        { "name": "status", "type": "varchar", "length": 16, "nullable": false, "charset": "utf8mb4" },
+        { "name": "amount", "type": "decimal", "nullable": false },
+        { "name": "remark", "type": "text", "nullable": true, "charset": "utf8mb4" },
+        { "name": "create_time", "type": "datetime", "nullable": false },
+        { "name": "pay_time", "type": "datetime", "nullable": true }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"], "unique": true, "primary": true },
+        { "name": "uk_order_no", "columns": ["order_no"], "unique": true },
+        { "name": "idx_user", "columns": ["user_id", "pay_time"], "unique": false }
+      ]
+    },
+    {
+      "name": "order_item",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 18000000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "order_id", "type": "bigint", "nullable": false },
+        { "name": "sku_id", "type": "bigint", "nullable": false },
+        { "name": "quantity", "type": "int", "nullable": false },
+        { "name": "price", "type": "decimal", "nullable": false }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"], "unique": true, "primary": true }
+      ]
+    },
+    {
+      "name": "users",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 900000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "mobile", "type": "varchar", "length": 20, "nullable": false, "charset": "utf8mb4" },
+        { "name": "name", "type": "varchar", "length": 255, "nullable": true, "charset": "utf8mb4" },
+        { "name": "level", "type": "int", "nullable": false },
+        { "name": "create_time", "type": "datetime", "nullable": false }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"], "unique": true, "primary": true },
+        { "name": "uk_mobile", "columns": ["mobile"], "unique": true },
+        { "name": "idx_level_time", "columns": ["level", "create_time"], "unique": false }
+      ]
+    },
+    {
+      "name": "user_address",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 2100000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "user_id", "type": "bigint", "nullable": false },
+        { "name": "city", "type": "varchar", "length": 32, "nullable": true, "charset": "utf8mb4" },
+        { "name": "detail", "type": "varchar", "length": 512, "nullable": true, "charset": "utf8mb4" },
+        { "name": "is_default", "type": "tinyint", "nullable": false }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"], "unique": true, "primary": true },
+        { "name": "idx_user_default", "columns": ["user_id", "is_default"], "unique": false }
+      ]
+    }
+  ]
+}

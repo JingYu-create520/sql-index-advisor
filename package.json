@@ -1,0 +1,64 @@
+{
+  "name": "sql-index-advisor",
+  "version": "0.1.0",
+  "description": "Offline index advisor for MySQL / MyBatis: slow query log in, index recommendations + migration SQL out.",
+  "keywords": [
+    "mysql",
+    "mybatis",
+    "index",
+    "slow-query-log",
+    "database",
+    "sql",
+    "cli",
+    "mcp"
+  ],
+  "license": "MIT",
+  "author": "JingYu-creates20",
+  "type": "module",
+  "bin": {
+    "sia": "./dist/cli.js",
+    "sia-mcp": "./dist/mcp.js",
+    "sql-index-advisor": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "examples",
+    "!examples/github-action",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}
