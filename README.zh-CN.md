@@ -73,7 +73,7 @@ sia examples/slow.log --format json
 
 ### 搞一个 `schema.json`（精度就靠它）
 
-工具**不连数据库**。用一条纯 `information_schema` 查询自己导出，5.7 / 8.0 都能跑：
+工具**不连数据库**。用一条纯 `information_schema` 查询自己导出。这条脚本只经过人工审阅，还没在真实服务端跑过，如果你的版本报错请开 issue：
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json

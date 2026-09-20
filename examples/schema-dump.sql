@@ -5,7 +5,8 @@
 --
 --   mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
 --
--- Works on MySQL 5.7 and 8.0 (JSON functions + GROUP_CONCAT with ORDER BY).
+-- Written against MySQL 5.7 and 8.0 (JSON functions + GROUP_CONCAT with ORDER BY),
+-- but NOT yet executed on a live server: review before running, and open an issue if it errors.
 -- GROUP_CONCAT is used instead of JSON_ARRAYAGG because MySQL's JSON_ARRAYAGG
 -- does not accept ORDER BY, and index column order is the whole point.
 

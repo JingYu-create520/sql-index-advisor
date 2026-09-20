@@ -75,7 +75,7 @@ sia examples/slow.log --format json
 
 ### Get a `schema.json` (this is what unlocks precision)
 
-The tool never connects to your database. Dump the schema yourself with one query — pure `information_schema`, works on MySQL 5.7 and 8.0:
+The tool never connects to your database. Dump the schema yourself with one query, written against pure `information_schema` (no client-side tooling). It has not yet been run against a live server, so treat it as tested-by-inspection and open an issue if it errors on your version:
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
