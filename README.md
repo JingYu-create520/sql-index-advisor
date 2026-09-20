@@ -1,5 +1,7 @@
 # sql-index-advisor
 
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.0](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.0) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
 Deterministic rules produce every conclusion — reproducible, unit-tested, and **no API key required**. The LLM is an optional layer that polishes the explanation text; it can never add, remove or re-rank a finding.
