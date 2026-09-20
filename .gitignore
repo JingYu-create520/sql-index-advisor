@@ -7,3 +7,11 @@ npm-debug.log*
 .vscode/
 .idea/
 *.local
+
+# Artifacts produced by the README walkthrough
+schema.json
+add-indexes.sql
+live-schema.json
+sia-report.json
+sia-annotations.txt
+sia-migrations.sql

@@ -77,7 +77,7 @@ sia examples/slow.log --format json
 
 ### Get a `schema.json` (this is what unlocks precision)
 
-The tool never connects to your database. Dump the schema yourself with one query, written against pure `information_schema` (no client-side tooling). It has not yet been run against a live server, so treat it as tested-by-inspection and open an issue if it errors on your version:
+The tool never connects to your database. Dump the schema yourself with one query over `information_schema` — verified against a live MySQL 8.0.46:
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
@@ -85,6 +85,26 @@ sia slow.log --schema schema.json
 ```
 
 Without it, rules that depend on existing indexes (`SIA002`, `SIA003`, `SIA005`, `SIA007`) stay silent and the report tells you so. **Silence is never reported as "all clear."**
+
+### See it work end to end
+
+`examples/seed-schema.sql` builds a deliberately under-indexed database (200k orders, 400k order items) so the advice has something real to bite on:
+
+```bash
+docker run -d --name sia-mysql -e MYSQL_ROOT_PASSWORD=sia -e MYSQL_DATABASE=demo \
+  -p 13307:3306 mysql:8.0
+docker exec -i sia-mysql mysql -uroot -psia demo < examples/seed-schema.sql
+docker exec -i sia-mysql mysql --raw --skip-column-names -uroot -psia demo \
+  < examples/schema-dump.sql > schema.json
+
+sia query "SELECT * FROM orders WHERE user_id=42 AND status='PAID' ORDER BY create_time DESC LIMIT 20" \
+    --schema schema.json --emit-sql add-indexes.sql
+docker exec -i sia-mysql mysql -uroot -psia demo < add-indexes.sql
+docker exec sia-mysql mysql -uroot -psia demo -e \
+  "EXPLAIN SELECT * FROM orders WHERE user_id=42 AND status='PAID' ORDER BY create_time DESC LIMIT 20\G"
+```
+
+The last command is the payoff. Before, `EXPLAIN` falls back to the partial `idx_user_pay`, estimates 23 rows and reports `Using filesort`. After the recommended `(user_id, status, create_time)`, it estimates **1 row** and the filesort is gone.
 
 ## Rules
 

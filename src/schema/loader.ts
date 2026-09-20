@@ -3,12 +3,21 @@ import { z } from "zod";
 import type { Schema, SchemaColumn, SchemaIndex, SchemaTable } from "../core/types.js";
 import { readFileSync } from "node:fs";
 
+/**
+ * `information_schema` reports "not applicable" as an explicit null, and
+ * schema-dump.sql passes those through, so optional metadata must accept both a
+ * missing key and a null one. `.optional()` alone rejects null — which made our
+ * own dump unreadable by our own loader.
+ */
+const optionalText = z.string().nullish();
+const optionalNumber = z.number().nullish();
+
 const columnSchema = z.object({
   name: z.string().min(1),
   type: z.string().min(1),
-  length: z.number().optional(),
+  length: optionalNumber,
   nullable: z.boolean().optional(),
-  charset: z.string().optional(),
+  charset: optionalText,
 });
 
 const indexSchema = z.object({
@@ -21,15 +30,15 @@ const indexSchema = z.object({
 
 const tableSchema = z.object({
   name: z.string().min(1),
-  engine: z.string().optional(),
-  charset: z.string().optional(),
+  engine: optionalText,
+  charset: optionalText,
   columns: z.array(columnSchema).min(1),
   indexes: z.array(indexSchema).default([]),
-  rowCountEstimate: z.number().optional(),
+  rowCountEstimate: optionalNumber,
 });
 
 const schemaFileSchema = z.object({
-  mysqlVersion: z.string().optional(),
+  mysqlVersion: optionalText,
   tables: z.array(tableSchema).min(1),
 });
 
@@ -51,15 +60,15 @@ export function validateSchema(input: unknown): SchemaLoadResult {
 
   const tables: SchemaTable[] = parsed.data.tables.map((t) => ({
     name: t.name.toLowerCase(),
-    engine: t.engine,
-    charset: t.charset,
-    rowCountEstimate: t.rowCountEstimate,
+    engine: t.engine ?? undefined,
+    charset: t.charset ?? undefined,
+    rowCountEstimate: t.rowCountEstimate ?? undefined,
     columns: t.columns.map((c): SchemaColumn => ({
       name: c.name.toLowerCase(),
       type: c.type.toLowerCase(),
-      length: c.length,
+      length: c.length ?? undefined,
       nullable: c.nullable,
-      charset: c.charset,
+      charset: c.charset ?? undefined,
     })),
     indexes: t.indexes.map((i): SchemaIndex => ({
       name: i.name,
@@ -71,7 +80,7 @@ export function validateSchema(input: unknown): SchemaLoadResult {
   }));
 
   return {
-    schema: { mysqlVersion: parsed.data.mysqlVersion, tables },
+    schema: { mysqlVersion: parsed.data.mysqlVersion ?? undefined, tables },
     errors: [],
   };
 }

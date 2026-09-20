@@ -53,6 +53,36 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
 - Docs: bilingual README and `docs/rules.md` recording each rule's trigger,
   reasoning and known false-positive boundary.
 
+### Fixed
+
+- **SIA001 recommended redundant indexes.** Run against a second, real codebase, six
+  suggestions came back of which two were strictly narrower than others on the same
+  table (`(sku_id)` alongside `(sku_id, warehouse_id)`). The engine now drops a
+  proposal that is a left prefix of another and records the coverage on the survivor.
+- **SIA001 treated a lone boolean/flag column as ordinary advice** — the classic
+  low-selectivity index. Such suggestions are capped at `info` and carry the
+  distinct-value query to run first.
+- **`schema-dump.sql` emitted invalid JSON**: `CAST(... AS JSON)` sat inside a
+  `CONCAT`, so it was concatenated as literal text instead of evaluated. Found by
+  running the query against MySQL 8.0.46.
+- **The loader rejected the output of its own dump script.** `information_schema`
+  returns explicit `null` for `length` / `charset` on non-string columns, and
+  `.optional()` accepts a missing key but not a null one. Optional metadata now
+  accepts both, and the live dump is kept as a test fixture.
+- `workspaceRelative` treated a backslash as a separator on every platform, breaking
+  workspace-relative PR annotations on Linux runners.
+- The CI smoke step inherited the runner's `bash -e`, so the CLI's legitimate exit
+  code 1 killed the step before it could be judged — and its assertions lacked
+  `|| exit 1`, so a broken check could have passed silently.
+
+### Verified against a live database
+
+MySQL 8.0.46 in Docker, seeded with `examples/seed-schema.sql`: the dump produces a
+valid `schema.json`; the recommended `(user_id, status, create_time)` executes as
+written; and `EXPLAIN` for the target query goes from the partial `idx_user_pay`
+with `Using filesort` and 23 estimated rows, to the new index with **1 estimated row
+and no filesort**. Verified on 8.0 only — 5.7 remains uninspected.
+
 ### Known limitations
 
 - No live `EXPLAIN` (planned as `--explain` in v2); MySQL only.

@@ -49,16 +49,15 @@ SELECT CONCAT(
                                     '{"name":"', idx2.INDEX_NAME,
                                     '","unique":', IF(idx2.NON_UNIQUE = 0, 'true', 'false'),
                                     ',"primary":', IF(idx2.INDEX_NAME = 'PRIMARY', 'true', 'false'),
-                                    ',"columns":CAST(',
-                                    QUOTE(CONCAT('[', GROUP_CONCAT(
+                                    ',"columns":',
+                                    CONCAT('[', GROUP_CONCAT(
                                         IFNULL(CONCAT('"', idx2.COLUMN_NAME, '"'), 'null')
-                                        ORDER BY idx2.SEQ_IN_INDEX SEPARATOR ','), ']')),
-                                    ' AS JSON)',
-                                    ',"subParts":CAST(',
-                                    QUOTE(CONCAT('[', GROUP_CONCAT(
+                                        ORDER BY idx2.SEQ_IN_INDEX SEPARATOR ','), ']'),
+                                    ',"subParts":',
+                                    CONCAT('[', GROUP_CONCAT(
                                         IFNULL(idx2.SUB_PART, 'null')
-                                        ORDER BY idx2.SEQ_IN_INDEX SEPARATOR ','), ']')),
-                                    ' AS JSON)}'
+                                        ORDER BY idx2.SEQ_IN_INDEX SEPARATOR ','), ']'),
+                                    '}'
                                 ) AS doc
                             FROM information_schema.STATISTICS idx2
                             WHERE idx2.TABLE_SCHEMA = tab.TABLE_SCHEMA

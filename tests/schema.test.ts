@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -26,6 +28,40 @@ const valid = {
     },
   ],
 };
+
+describe("validateSchema: the real schema-dump.sql output", () => {
+  it("accepts the explicit nulls information_schema produces", () => {
+    // Regression, found only by running schema-dump.sql against a live MySQL 8:
+    // every non-string column comes back as "length": null / "charset": null,
+    // and `.optional()` rejects an explicit null. Our own dump failed our own
+    // loader, so the documented quickstart could not have worked.
+    const doc = JSON.parse(readFileSync("tests/fixtures/schema-live-dump.json", "utf8"));
+    const { schema, errors } = validateSchema(doc);
+    expect(errors).toEqual([]);
+
+    const orders = findTable(schema, "orders");
+    expect(orders?.columns.find((c) => c.name === "id")).toMatchObject({
+      type: "bigint",
+      length: undefined,
+      charset: undefined,
+    });
+    expect(orders?.columns.find((c) => c.name === "status")).toMatchObject({
+      type: "varchar",
+      length: 16,
+    });
+    expect(orders?.indexes.map((i) => i.name)).toContain("idx_user_pay");
+    expect(schema?.mysqlVersion).toMatch(/^8\./);
+  });
+
+  it("still computes byte budgets for columns the dump left unqualified", () => {
+    const doc = JSON.parse(readFileSync("tests/fixtures/schema-live-dump.json", "utf8"));
+    const table = findTable(validateSchema(doc).schema, "orders");
+    const remark = findColumn(table, "remark");
+    expect(columnKeyBytes(remark!)).toBe(Infinity);
+    const orderId = findColumn(findTable(validateSchema(doc).schema, "order_item"), "order_id");
+    expect(columnKeyBytes(orderId!)).toBe(8);
+  });
+});
 
 describe("validateSchema", () => {
   it("normalises table and column names to lower case", () => {

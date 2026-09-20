@@ -264,7 +264,8 @@ README 提供 Claude/Qoder/Cursor 的 `mcpServers` 一行配置 JSON。
 - [ ] GitHub Action 在靶子仓库发出行级评论
 - [x] 双语 README + CHANGELOG + LICENSE(MIT)；demo 用真实终端输出，GIF 待录
 - [x] ~~npm 已发布 0.1.0~~ → 按 R10 改为 GitHub 直装，已打 tag `v0.1.0` / `v0`
-- [ ] `examples/schema-dump.sql` 在真实 MySQL 5.7/8.0 上执行验证（本机无库，唯一未验证的技术宣称）
+- [x] `examples/schema-dump.sql` 在真实 MySQL 8.0.46（Docker）上执行验证 ✅，产出合法 JSON 且被 loader 接受；5.7 仍未验证
+- [x] **端到端实证**：推荐的 `(user_id, status, create_time)` 在真库执行成功，`EXPLAIN` 从 `idx_user_pay` + `Using filesort`（估 23 行）变成新索引（估 1 行、无 filesort）
 - [ ] HN + 掘金 + V2EX 分发完成
 
 ## 13. 双项目总纪律(与 spring-review 共用)

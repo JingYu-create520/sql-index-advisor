@@ -75,7 +75,7 @@ sia examples/slow.log --format json
 
 ### 搞一个 `schema.json`（精度就靠它）
 
-工具**不连数据库**。用一条纯 `information_schema` 查询自己导出。这条脚本只经过人工审阅，还没在真实服务端跑过，如果你的版本报错请开 issue：
+工具**不连数据库**。用一条纯 `information_schema` 查询自己导出（已在真实 MySQL 8.0.46 上跑通）：
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
@@ -83,6 +83,23 @@ sia slow.log --schema schema.json
 ```
 
 没有它，依赖现有索引的规则（`SIA002` / `SIA003` / `SIA005` / `SIA007`）会保持沉默，而且报告会明确告诉你它们为什么沉默。**沉默永远不会被报告成"没问题"。**
+
+### 想看完整闭环？
+
+`examples/seed-schema.sql` 会建一个"故意少建索引"的库（20 万订单、40 万订单明细），让建议有真实靶子：
+
+```bash
+docker run -d --name sia-mysql -e MYSQL_ROOT_PASSWORD=sia -e MYSQL_DATABASE=demo -p 13307:3306 mysql:8.0
+docker exec -i sia-mysql mysql -uroot -psia demo < examples/seed-schema.sql
+docker exec -i sia-mysql mysql --raw --skip-column-names -uroot -psia demo < examples/schema-dump.sql > schema.json
+
+sia query "SELECT * FROM orders WHERE user_id=42 AND status='PAID' ORDER BY create_time DESC LIMIT 20" \
+    --schema schema.json --emit-sql add-indexes.sql
+docker exec -i sia-mysql mysql -uroot -psia demo < add-indexes.sql
+docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders WHERE user_id=42 AND status='PAID' ORDER BY create_time DESC LIMIT 20\G"
+```
+
+最后一条就是回报。改之前 `EXPLAIN` 只能退到不完整的 `idx_user_pay`，估算扫 23 行且带 `Using filesort`；用上推荐的 `(user_id, status, create_time)` 之后估算 **1 行**，filesort 消失。
 
 ## 规则
 
