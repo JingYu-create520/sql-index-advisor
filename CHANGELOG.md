@@ -4,10 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.1 — 2026-09-21
 
 ### Fixed
 
+- **Merged statements produced cross-table DDL.** A `.sql` file whose
+  statements end at a newline instead of `;` was parsed as one statement: the first
+  `FROM` set the table and a later `WHERE` set the columns, so
+  `SELECT count(*) FROM semantic_cache` plus `SELECT count(*) FROM outbox WHERE
+  aggregate_id = 'x'` emitted
+  `ALTER TABLE `semantic_cache` ADD INDEX (aggregate_id)` — a column belonging to
+  another table, straight into the file `--emit-sql` writes. `parseSql` now refuses
+  input with a second top-level statement keyword after the FROM (UNION and friends
+  excluded) and names the reason; the engine reports it as its own skip cause instead
+  of the vague "no table could be identified". Related: `analyze_sql` documents
+  "可用 ; 分隔多条" but the inline path never split on `;` either — it does now,
+  quote-, comment- and paren-aware. Pinned by `tests/merged.test.ts` (11 cases).
 - **SIA001 said different things in the two languages.** The Chinese message
   warns that an existing index covers only a left prefix of the proposed one and
   should be evaluated for removal; `messageEn` skipped that branch and asserted
