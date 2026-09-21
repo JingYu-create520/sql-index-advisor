@@ -39,7 +39,7 @@ const echoing: LlmProvider = {
   },
 };
 
-describe("LLM layer cannot change conclusions (PLAN 5.1)", () => {
+describe("LLM layer cannot change conclusions (DESIGN-NOTES D10)", () => {
   it("polish only appends llmNote", async () => {
     const result = run();
     const polished = await polish(result, echoing, 10);

@@ -1,7 +1,7 @@
 /**
- * SIA001 — missing index candidate.
+ * SIA001: missing index candidate.
  *
- * Column order follows docs/PLAN.md R1: equality -> GROUP BY / ORDER BY -> range.
+ * Column order follows docs/DESIGN-NOTES.md D1: equality -> GROUP BY / ORDER BY -> range.
  * A range predicate stops the index from serving equality lookups *or* sorting on
  * the columns behind it, which is why the range column goes last.
  */
@@ -195,7 +195,7 @@ function equalityAlreadyIndexed(
 /**
  * A lone boolean / flag column is the classic useless index: a few distinct
  * values over millions of rows means the optimizer will not even pick it. We
- * still report it — it can be legitimately rare-and-hot — but never above `info`,
+ * still report it (a rare-and-hot flag is a real index) but never above `info`,
  * and with the selectivity check spelled out.
  */
 const FLAG_NAMES = /^(is_|has_|can_|enabled?|disabled|deleted?|synced?|verified|activated?|expired?|valid|invalid|active|inactive|state|status|type|kind|flag)$/;

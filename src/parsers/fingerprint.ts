@@ -1,5 +1,5 @@
 /**
- * SQL fingerprinting (docs/PLAN.md R2).
+ * SQL fingerprinting (docs/DESIGN-NOTES.md D2).
  *
  * A slow query log repeats the same query pattern thousands of times with
  * different literals. Folding literals into `?` gives us a stable key we can

@@ -1,10 +1,10 @@
 /**
- * SIA006 — deep pagination.
+ * SIA006: deep pagination.
  *
  * `LIMIT 100000, 20` still walks and throws away 100000 index entries. Only
  * literal offsets are judged, because a MyBatis `LIMIT #{offset}, #{size}` carries
  * no static value and guessing is exactly the false positive we promised to avoid
- * (docs/PLAN.md R4).
+ * (docs/DESIGN-NOTES.md D4).
  */
 
 import type { Finding, Rule, RuleContext } from "../core/types.js";
@@ -84,9 +84,9 @@ export const sia006: Rule = {
         `LIMIT ${limit.offset}, ${limit.rowCount ?? "?"}：MySQL 仍要扫描并丢弃前 ${limit.offset} 行，页码越深代价越高，Pages_read 全部白付。`,
         correlated
           ? `该语句的 WHERE 含子查询，静态改写延迟关联容易出错，这里只给模板，请人工核对子查询在派生表中的可见性：${deferredJoin}`
-          : `方案一（延迟关联，改动最小）：先在索引里翻主键，再回表取整行 —— ${deferredJoin}`,
+          : `方案一（延迟关联，改动最小）：先在索引里翻主键，再回表取整行：${deferredJoin}`,
         ...(seek
-          ? [`方案二（游标/seek 分页，适合无限下拉）：用上一页最后一行的排序键替代偏移量 —— ${seek}`]
+          ? [`方案二（游标/seek 分页，适合无限下拉）：用上一页最后一行的排序键替代偏移量：${seek}`]
           : [`方案二（游标分页）：当前查询没有 ORDER BY，无法生成 seek 条件；深分页必须先有稳定排序键。`]),
         ...(schemaTable
           ? []

@@ -1,9 +1,9 @@
 /**
  * Lightweight MySQL statement analyser.
  *
- * Scope is a documented subset (docs/PLAN.md section 11): single statements,
+ * Scope is a documented subset (docs/rules.md): single statements,
  * SELECT / INSERT / UPDATE / DELETE, one FROM block with ANSI and comma joins.
- * Anything outside the subset degrades into `ParsedQuery.notes` — this module
+ * Anything outside the subset degrades into `ParsedQuery.notes`, so this module
  * must never throw, because a crash in a CI gate is worse than a missed hint.
  */
 

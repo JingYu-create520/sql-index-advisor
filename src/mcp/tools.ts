@@ -42,7 +42,7 @@ export interface ToolContent {
 
 /**
  * Structurally compatible with the SDK's CallToolResult, which carries an index
- * signature — a plain interface would not satisfy it.
+ * signature; a plain interface would not satisfy it.
  */
 export type ToolResult = {
   content: ToolContent[];

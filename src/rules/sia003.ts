@@ -1,5 +1,5 @@
 /**
- * SIA003 — leftmost prefix violation.
+ * SIA003: leftmost prefix violation.
  *
  * An index (a, b, c) is useless for `WHERE a = ? AND c = ?` beyond the `a`
  * lookup: `b` breaks the run, so `c` cannot narrow the range. This rule exists

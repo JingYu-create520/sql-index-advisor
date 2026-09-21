@@ -2,7 +2,7 @@
  * MySQL slow query log reader.
  *
  * Two jobs: split the file into events, then aggregate events by SQL fingerprint
- * (docs/PLAN.md R2). A real log repeats one pattern hundreds of times, so ranking
+ * (docs/DESIGN-NOTES.md D2). A real log repeats one pattern hundreds of times, so ranking
  * raw events produces a report nobody can act on.
  */
 

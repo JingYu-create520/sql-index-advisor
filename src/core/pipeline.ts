@@ -44,7 +44,7 @@ export async function runPipeline(
 }
 
 /**
- * Exit codes (docs/PLAN.md R6). Adopting a lint tool should never turn a green
+ * Exit codes (docs/DESIGN-NOTES.md D6). Adopting a lint tool should never turn a green
  * build red on day one, so only `--fail-on` severity blocks.
  */
 export const EXIT_OK = 0;

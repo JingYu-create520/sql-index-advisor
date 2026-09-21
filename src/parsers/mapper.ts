@@ -1,7 +1,7 @@
 /**
  * MyBatis mapper XML reader.
  *
- * The hard part is not the XML, it is MyBatis' dynamic SQL. Policy (docs/PLAN.md R4):
+ * The hard part is not the XML, it is MyBatis' dynamic SQL. Policy (docs/DESIGN-NOTES.md D4):
  *
  *  - `<if>`      the branch is taken. Extra predicates only widen the set of
  *                index candidates, so keeping them is the safe direction.
@@ -228,7 +228,7 @@ function finalise(body: string, fragments: Map<string, string>, notes: string[])
   text = text.replace(/<selectKey\b[\s\S]*?<\/selectKey>/gi, " ");
   text = text.replace(/<bind\b[^>]*\/?>/gi, " ");
 
-  // <include refid="..."> — inline the shared fragment.
+  // <include refid="...">: inline the shared fragment.
   text = text.replace(/<include\b([^>]*?)\/?>/gi, (_all, a: string) => {
     const refid = attr(a, "refid");
     if (!refid) return " ";

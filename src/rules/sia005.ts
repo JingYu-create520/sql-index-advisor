@@ -1,10 +1,10 @@
 /**
- * SIA005 — implicit type conversion kills the index.
+ * SIA005: implicit type conversion kills the index.
  *
  * Direction matters. `varchar_col = 123` converts the *column* to a number for
  * every row, so no index on that column can be used. The reverse,
  * `int_col = '123'`, converts the constant once and still uses the index, so we
- * deliberately do not report it (docs/PLAN.md: 宁可漏报不误报).
+ * deliberately do not report it (docs/rules.md: 宁可漏报不误报).
  */
 
 import type { ColumnRef, Finding, Rule, RuleContext } from "../core/types.js";

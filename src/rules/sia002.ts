@@ -1,10 +1,10 @@
 /**
- * SIA002 — prefix index.
+ * SIA002: prefix index.
  *
  * A long VARCHAR / TEXT column cannot occupy a full index key: InnoDB caps a key
  * at 3072 bytes (8.0 DYNAMIC) or 767 bytes (5.7 COMPACT), and utf8mb4 costs four
  * bytes per character. The old "VARCHAR > 255" rule of thumb is a utf8mb3 relic,
- * so the threshold here is computed in bytes (docs/PLAN.md R7).
+ * so the threshold here is computed in bytes (docs/DESIGN-NOTES.md D7).
  */
 
 import type { Finding, Rule, RuleContext } from "../core/types.js";

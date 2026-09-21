@@ -236,7 +236,7 @@ describe("language selection", () => {
   });
 });
 
-describe("exit codes (PLAN R6)", () => {
+describe("exit codes (DESIGN-NOTES D6)", () => {
   const withSeverity = (severity: Finding["severity"]) =>
     analyze([]) && {
       ...analyze([]),

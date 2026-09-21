@@ -1,9 +1,9 @@
 /**
- * SIA004 — a function or expression sits on the indexed column.
+ * SIA004: a function or expression sits on the indexed column.
  *
  * `WHERE DATE(create_time) = '2026-09-17'` cannot use an index on create_time:
  * the index stores raw datetimes, not the function's output. Two ways out, and
- * we prefer the rewrite because it costs no storage (docs/PLAN.md R7).
+ * we prefer the rewrite because it costs no storage (docs/DESIGN-NOTES.md D7).
  */
 
 import type { ColumnRef, Finding, Rule, RuleContext } from "../core/types.js";
@@ -63,7 +63,7 @@ export const sia004: Rule = {
           rewrite: rewrite?.predicate,
           message: [
             `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
-            rewrite ? `改写方案：${rewrite.predicate} —— ${rewrite.why}` : "该表达式没有等价改写形式，可考虑函数索引。",
+            rewrite ? `改写方案：${rewrite.predicate}（${rewrite.why}）` : "该表达式没有等价改写形式，可考虑函数索引。",
             ...(options.mysqlVersion >= 8
               ? [`MySQL 8.0 可用函数索引 ((${ref.raw})) 直接索引表达式结果，但查询必须写成完全相同的表达式才能命中；5.7 不支持。`]
               : [`MySQL 5.7 不支持函数索引，只能改写查询。`]),

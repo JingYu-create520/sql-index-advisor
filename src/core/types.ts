@@ -75,7 +75,7 @@ export interface LimitClause {
   raw: string;
 }
 
-/** Result of parsing one SQL statement. Never throws — failures degrade to `notes`. */
+/** Result of parsing one SQL statement. Never throws; failures degrade to `notes`. */
 export interface ParsedQuery {
   sql: string;
   /** Normalised text with literals replaced by `?`. */
@@ -89,7 +89,7 @@ export interface ParsedQuery {
   selectStar: boolean;
   /**
    * Aliases defined by the SELECT list (`SUM(amount) AS gmv`). ORDER BY may sort
-   * by these, and they are not real columns — indexing one would be nonsense.
+   * by these, and they are not real columns, so indexing one would be nonsense.
    */
   selectAliases: string[];
   orderBy: ColumnRef[];
@@ -137,7 +137,7 @@ export interface QueryRecord {
   rawInterpolation?: boolean;
 }
 
-/** One rule verdict. See docs/PLAN.md section 6. */
+/** One rule verdict. See docs/rules.md. */
 export interface Finding {
   rule: string;
   severity: Severity;
@@ -159,7 +159,7 @@ export interface Finding {
   table?: string;
   /**
    * Columns of the index this finding proposes, in order. Lets the engine drop a
-   * suggestion that is a left prefix of a wider suggestion on the same table —
+   * suggestion that is a left prefix of a wider suggestion on the same table:
    * `(sku_id)` is noise once `(sku_id, warehouse_id)` is on the table.
    */
   indexColumns?: string[];
@@ -180,7 +180,7 @@ export interface SchemaIndex {
 
 export interface SchemaColumn {
   name: string;
-  /** e.g. "varchar", "bigint", "text" — lower-cased, no length. */
+  /** e.g. "varchar", "bigint", "text"; lower-cased, no length. */
   type: string;
   /** Declared length for string types. */
   length?: number;

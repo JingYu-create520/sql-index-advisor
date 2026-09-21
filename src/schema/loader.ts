@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 /**
  * `information_schema` reports "not applicable" as an explicit null, and
  * schema-dump.sql passes those through, so optional metadata must accept both a
- * missing key and a null one. `.optional()` alone rejects null — which made our
+ * missing key and a null one. `.optional()` alone rejects null, which made our
  * own dump unreadable by our own loader.
  */
 const optionalText = z.string().nullish();

@@ -17,7 +17,7 @@ describe("SIA001 missing index candidate", () => {
     expect(findings.some((f) => f.table === "orders")).toBe(false);
   });
 
-  it("positive: orders columns as equality -> ordering -> range (PLAN R1)", () => {
+  it("positive: orders columns as equality -> ordering -> range (DESIGN-NOTES D1)", () => {
     const findings = runRule(
       sia001,
       "SELECT id FROM orders WHERE status = 'PAID' AND amount > 100 ORDER BY create_time DESC",

@@ -40,7 +40,7 @@ export interface PolishResult {
 
 /**
  * Attach `llmNote` to each finding. Providers that fail fall back to the mock
- * text rather than aborting the run — a flaky endpoint must not break a CI gate.
+ * text rather than aborting the run: a flaky endpoint must not break a CI gate.
  */
 export async function polish(
   result: AnalysisResult,

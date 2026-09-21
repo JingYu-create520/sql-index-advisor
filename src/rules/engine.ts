@@ -4,7 +4,7 @@
  * Two responsibilities beyond "run every rule":
  *  1. Gate rules on the inputs they need (`needsSchema` / `needsMetrics`) and
  *     report *why* something was skipped, so silence is never mistaken for
- *     "no problems found" (docs/PLAN.md R5).
+ *     "no problems found" (docs/DESIGN-NOTES.md D5).
  *  2. Contain rule bugs. A throwing rule must not take down a CI gate.
  */
 

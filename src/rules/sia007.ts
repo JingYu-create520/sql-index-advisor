@@ -1,11 +1,11 @@
 /**
- * SIA007 — covering index opportunity.
+ * SIA007: covering index opportunity.
  *
  * When every column the query needs already lives inside the index, InnoDB never
  * touches the clustered index, and `Extra: Using index` replaces thousands of
  * random-page 回表 reads. Expensive advice, so it is gated on observed row
  * pressure from the slow log rather than guessed from shape alone
- * (docs/PLAN.md R5: this rule needs both schema *and* metrics).
+ * (docs/DESIGN-NOTES.md D5: this rule needs both schema *and* metrics).
  */
 
 import type { Finding, Rule, RuleContext } from "../core/types.js";
