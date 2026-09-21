@@ -30,6 +30,97 @@ const RESERVED = new Set([
 /** Functions whose argument is *not* a column reference on its own. */
 const AGGREGATES = new Set(["count", "sum", "avg", "min", "max", "group_concat"]);
 
+/** Words that can only begin a statement, never continue one. */
+const STATEMENT_STARTERS = new Set(["select", "insert", "update", "delete", "replace", "with"]);
+
+/** Set operators, after which a second `SELECT` at top level is legitimate. */
+const SET_OPERATORS = new Set(["union", "intersect", "except"]);
+
+/**
+ * How many extra statements are hiding inside this input?
+ *
+ * A `.sql` file whose statements end at a newline instead of a `;` reaches the
+ * parser as one long string. The old behaviour was to parse straight through it,
+ * so the first `FROM` set the table while a later `WHERE` set the columns, and
+ * two unrelated queries produced
+ * `ALTER TABLE semantic_cache ADD INDEX (aggregate_id)` — `aggregate_id` belongs
+ * to `outbox`. A wrong recommendation is worse than none, because `--emit-sql`
+ * writes it into a migration file that somebody runs.
+ *
+ * `UNION`/`INTERSECT`/`EXCEPT` are the legitimate shapes that look like this, so
+ * they are excluded by name. Subqueries are already excluded by paren depth.
+ */
+function countMergedStatements(tokens: Token[]): number {
+  let seenFrom = false;
+  let merged = 0;
+  for (let i = 1; i < tokens.length; i += 1) {
+    const t = tokens[i]!;
+    if (t.depth !== 0 || t.type !== "word") continue;
+    const word = t.value.toLowerCase();
+    if (word === "from") {
+      seenFrom = true;
+      continue;
+    }
+    if (!seenFrom || !STATEMENT_STARTERS.has(word)) continue;
+    const prev = tokens[i - 1];
+    const prev2 = tokens[i - 2];
+    if (prev && SET_OPERATORS.has(prev.value.toLowerCase())) continue;
+    if (prev && isWord(prev, "all") && prev2 && SET_OPERATORS.has(prev2.value.toLowerCase())) continue;
+    merged += 1;
+  }
+  return merged;
+}
+
+/**
+ * Split raw SQL text into individual statements on top-level `;`.
+ *
+ * The MCP `analyze_sql` tool advertises "可用 ; 分隔多条", and a `.sql` file may
+ * hold several queries, but the inline path handed the whole blob to `parseSql`
+ * as one statement. This scanner tracks quotes, paren depth and the three
+ * comment forms itself, because `stripComments` collapses offsets.
+ */
+export function splitStatements(text: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote: string | null = null;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+
+    if (quote) {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    if ((ch === "-" && text[i + 1] === "-" && (text[i + 2] === " " || text[i + 2] === "\t")) || ch === "#") {
+      const end = text.indexOf("\n", i);
+      i = end === -1 ? text.length : end - 1;
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    else if (ch === ";" && depth === 0) {
+      const piece = text.slice(start, i).trim();
+      if (piece) out.push(piece);
+      start = i + 1;
+    }
+  }
+
+  const tail = text.slice(start).trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
 export function parseSql(input: string): ParsedQuery {
   const notes: string[] = [];
   const empty: ParsedQuery = {
@@ -50,6 +141,16 @@ export function parseSql(input: string): ParsedQuery {
     const tokens = tokenize(stripComments(input));
     if (tokens.length === 0) {
       return { ...empty, notes: ["空语句，已跳过"] };
+    }
+
+    const merged = countMergedStatements(tokens);
+    if (merged > 0) {
+      return {
+        ...empty,
+        notes: [
+          `这条输入里混了 ${merged + 1} 个语句但没有任何分号分隔，已跳过：把它们当成一条解析会给出跨表的索引建议。每条语句请以 ; 结尾。`,
+        ],
+      };
     }
 
     const kind = statementKind(tokens);

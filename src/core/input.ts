@@ -7,7 +7,7 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
 
 import type { QueryRecord } from "./types.js";
-import { parseSql } from "../parsers/sql.js";
+import { parseSql, splitStatements } from "../parsers/sql.js";
 import { parseSlowLog } from "../parsers/slowlog.js";
 import { discoverMapperFiles, loadMapperFiles, mapperStatementsToRecords } from "../parsers/mapper.js";
 
@@ -46,21 +46,14 @@ export function loadInput(
   const kind = options.kind ?? detectInputKind(source);
 
   if (options.inline || (!options.kind && !existsSync(source))) {
-    const parsed = parseSql(source);
-    if (parsed.notes.length > 0) notes.push(...parsed.notes);
-    return {
-      kind: "sql",
-      notes,
-      records: [
-        {
-          fingerprint: parsed.fingerprint,
-          sql: source,
-          parsed,
-          input: "sql",
-          occurrences: 1,
-        },
-      ],
-    };
+    // One record per statement: `analyze_sql` documents `;` as a separator, so a
+    // multi-statement call must not be analysed as a single query.
+    const records: QueryRecord[] = splitStatements(source).map((sql) => {
+      const parsed = parseSql(sql);
+      if (parsed.notes.length > 0) notes.push(...parsed.notes);
+      return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql" as const, occurrences: 1 };
+    });
+    return { kind: "sql", notes, records };
   }
 
   if (kind === "mapper") {
@@ -85,6 +78,9 @@ export function loadInput(
   if (kind === "slowlog" && result.ignoredEvents > 0) {
     notes.push(`忽略了 ${result.ignoredEvents} 个无法识别的事件块`);
   }
+  // A record the parser refused is not a clean record: surface why, or the run
+  // ends with "nothing to report" over input that was never looked at.
+  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(reason);
   return { kind: kind === "sql" ? "sql" : "slowlog", records: result.records, notes };
 }
 

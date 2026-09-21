@@ -105,6 +105,12 @@ function missingDependency(
   if (record.parsed.notes.some((n) => n.includes("解析失败"))) {
     return { reason: "SQL 解析失败", reasonEn: "statement failed to parse" };
   }
+  if (record.parsed.notes.some((n) => n.includes("分号"))) {
+    return {
+      reason: "多条语句混在一起且缺少分号，未分析",
+      reasonEn: "several statements arrived merged (no ';' between them); not analysed",
+    };
+  }
   if (record.parsed.tables.length === 0) {
     return { reason: "没有识别到表名", reasonEn: "no table could be identified" };
   }
