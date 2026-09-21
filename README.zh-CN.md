@@ -167,7 +167,7 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 **GitHub Action** —— 在改动的行上直接评论：
 
 ```yaml
-- uses: JingYu-creates20/sql-index-advisor@v0
+- uses: JingYu-create520/sql-index-advisor@v0
   with:
     path: src/main/resources/mapper
     schema: schema.json        # 可选，但精度差别很大
@@ -200,6 +200,34 @@ sia slow.log --llm
   - 相关子查询不展开；SIA006 会降级成只给模板，也不敢给出可能改变结果集的改写。
 
 支持的 SQL 子集：单条 `SELECT` / `INSERT` / `UPDATE` / `DELETE`，ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给出 `info` 提示——不会崩，也不会编造建议。
+
+## 它答错过的地方
+
+下面每一条都是本工具在真实 SQL 上真给出过的建议，而且每一条都是错的。把它们写出来，比让你自己撞见便宜。
+
+**一条索引能覆盖的事，报了两次。** `WHERE sku_id = ?` 和另一条 `WHERE sku_id = ? AND warehouse_id = ?`，曾经会在同一张表上同时产出 `(sku_id)` 和 `(sku_id, warehouse_id)`。窄的是宽的最左前缀，建了不多覆盖任何东西，只多一份写放大。现在引擎在排序后跑一轮前缀冗余消除：窄的那条被丢掉，活下来的那条会说明自己吞掉了谁（`该索引同时覆盖另外 N 条查询的条件，无需重复建。`）。对应测试是 `tests/engine.test.ts` 里的 `drops a narrower index that the wider one already serves`，另外语料层还断言了"同一次运行里不可能有两条建议互为前缀"。
+
+**给布尔标志位建索引。** `WHERE enabled = 0` 曾经会产出 `ADD INDEX (enabled)`。几百万行、两个取值的列，优化器根本不会选它——这种建议正是"索引顾问"被卸载的原因。现在单列标志位（类型是 `tinyint`/`bit`/`bool`，或者列名匹配 `is_`、`has_`、`enabled`、`deleted`、`synced`、`status`、`type` 等）依然会报，因为"极少为真且很热"的标志位确实该建，但它被压到 `info`，并且附带要先跑的验证语句：
+
+```sql
+SELECT COUNT(DISTINCT enabled) / COUNT(*) FROM stock;
+```
+
+复合索引里的标志位不扣分：`(sku_id, synced)` 是好索引，区分度由 `sku_id` 承担。这两面都被测试钉住了。
+
+**给一个不存在的列建索引。** `SELECT SUM(amount) AS gmv ... ORDER BY gmv` 曾经要给 `gmv` 建索引，而它是输出别名，压根不是列。另一条 `WHERE amount > 1e999` 会给一个叫 `e999` 的列建索引，因为分词器把科学计数法字面量读成了"数字 + 标识符"。两处都已修复；`e999` 那个是生成语料发现的，不是手写用例发现的——这就是语料存在的理由。
+
+**同一条查询被算成两条。** 带符号字面量当年没被归一化，`-1` 和 `1` 会把一个查询模式裂成两个指纹，于是它的 `Rows_examined` 被对半砍、排名也往后掉——工具把自己最该报的那条藏了起来。现在"跨字面量、跨正负号、跨 `IN (...)` 长度的指纹稳定性"是被断言的性质。
+
+**这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告；真正偏斜到只有一行为真的列，也拿到同样的警告。要知道真相就得统计信息，而那就意味着连你的数据库——见上一节。这个缺口不是待办，只能由建议旁边那条验证 SQL 来补。
+
+## 尚未验证的部分
+
+- `examples/schema-dump.sql` 只在真实 MySQL **8.0.46** 上跑通过。5.7 从未执行过；`--mysql-version 5.7` 改的是本工具输出的 DDL 文本，不构成对 5.7 服务器的任何证据。
+- GitHub Action 的注解字符串只在本地断言过。这个 Action 还没有在任何人的 PR 上作为状态检查跑过。
+- MCP server 在测试里完成了真实的 stdio `initialize` → `tools/list` → `tools/call` 握手，但没有在某个具体桌面客户端里配置过。
+
+如果你撞上以上任何一条，一条带你实际执行命令的 issue，比一个 star 对这个项目更有用。
 
 ## 开发
 

@@ -176,7 +176,7 @@ Four tools: `analyze_sql`, `analyze_slow_log`, `analyze_mapper`, `explain_rules`
 **GitHub Action** — annotations on the changed lines:
 
 ```yaml
-- uses: JingYu-creates20/sql-index-advisor@v0
+- uses: JingYu-create520/sql-index-advisor@v0
   with:
     path: src/main/resources/mapper
     schema: schema.json        # optional but much more precise
@@ -209,6 +209,34 @@ Off by default: no key, no network, deterministic text. When on, the endpoint is
   - Correlated subqueries are not expanded; SIA006 degrades to a template rather than risk a rewrite that changes the result set.
 
 Supported SQL subset: single `SELECT` / `INSERT` / `UPDATE` / `DELETE`, ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE`, `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note — never a crash, never a fabricated recommendation.
+
+## Where it got it wrong
+
+Each item below is advice this tool really emitted on real SQL, and each one was wrong. Publishing them is cheaper than letting you find them yourself.
+
+**Two indexes where one covers both.** `WHERE sku_id = ?` in one query and `WHERE sku_id = ? AND warehouse_id = ?` in another used to produce `(sku_id)` *and* `(sku_id, warehouse_id)` on the same table. The narrow one is a left prefix of the wide one, so it buys no coverage and only adds write cost. The engine now runs a redundancy pass after ranking: the narrower suggestion is dropped and the survivor states what it absorbed (`It also serves 3 other queried access path(s) on this table.`) — see `drops a narrower index that the wider one already serves` in `tests/engine.test.ts`, plus a corpus-wide invariant that no two emitted suggestions in a run are prefixes of each other.
+
+**An index on a boolean flag.** `WHERE enabled = 0` used to yield `ADD INDEX (enabled)`. On a two-valued column over millions of rows the optimizer will not consider it, and suggestions like that are the reason people uninstall advisors. A lone flag column — `tinyint`/`bit`/`bool` by type, or a name matching `is_`, `has_`, `enabled`, `deleted`, `synced`, `status`, `type`, … — is still reported, because a rare-and-hot flag is legitimate, but it is capped at `info` and arrives with the check to run first:
+
+```sql
+SELECT COUNT(DISTINCT enabled) / COUNT(*) FROM stock;
+```
+
+A flag *inside* a composite is not penalised: `(sku_id, synced)` is a fine index, since `sku_id` carries the selectivity. Both halves of that distinction are pinned by tests.
+
+**A column that does not exist.** `SELECT SUM(amount) AS gmv ... ORDER BY gmv` asked to index `gmv`, which is an output alias and not a column at all. Separately `WHERE amount > 1e999` produced an index on a column named `e999`, because the tokenizer read a scientific-notation literal as a number followed by an identifier. Both fixed; the `e999` one was found by the generated corpus rather than by a hand-written test, which is the argument for the corpus.
+
+**The same query counted twice.** Signed literals were not masked during normalization, so `-1` and `1` split one query pattern into two fingerprints — halving its recorded `Rows_examined` and pushing it down the ranking, i.e. the tool hid its own worst offender. Fingerprint stability across literal values, signs and `IN (...)` lengths is now an asserted property.
+
+**What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. Without statistics — which would mean connecting to your database, see above — that gap cannot be closed by a rule, only by the selectivity query printed next to the suggestion.
+
+## What has not been verified
+
+- `examples/schema-dump.sql` is confirmed against a live MySQL **8.0.46**. It has never been run on 5.7; `--mysql-version 5.7` only changes the DDL text this tool emits, it is not evidence about a 5.7 server.
+- The GitHub Action's annotation strings are asserted locally. The Action has not run as a status check on anyone's pull request.
+- The MCP server answers a real stdio `initialize` → `tools/list` → `tools/call` handshake in tests. It has not been configured inside a specific desktop client.
+
+If you hit one of these, an issue containing the exact command you ran is worth more to this project than a star.
 
 ## Development
 

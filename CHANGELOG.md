@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **GitHub Action gate step**: exit code `2` (the tool could not run — bad path,
+  unreadable input) was reported exactly like `1` (findings at or above
+  `--fail-on`), and because Actions executes `run:` blocks under `bash -e` the
+  explanatory `::error::` line never reached the log. Each case now prints its
+  own reason. Verified against the built CLI: `0` quiet, `1` findings, `2`
+  missing file.
+- **Action install snippet** in both READMEs and `examples/github-action/`
+  referenced a repository owner that does not exist, so the documented
+  `uses: …@v0` line could not resolve.
+
+### Added
+
+- README: "Where it got it wrong" — the four concrete false positives this tool
+  emitted during development (prefix-redundant pairs, single-column indexes on
+  boolean flags, a `SELECT` alias indexed as a column, one query pattern split
+  into two fingerprints), what each one does now, and which test pins it. Plus
+  "What has not been verified", listing MySQL 5.7, the Action on a real PR, and
+  MCP inside a client.
+
 ## 0.1.0 — 2026-09-20
 
 First release. Core premise: index advice you can verify — every finding carries

@@ -21,17 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 行级评论：mapper 目录扫一遍，结果以 ::warning file=...,line=... 注解发出。
-      # fail-on: off => 只提示，不卡构建；想要门禁时改成 error。
+      # Line-level comments: scan the mapper directory and emit the result as
+      # ::warning file=...,line=... annotations.
+      # fail-on: off => advisory only, does not redden the build; change to error for a gate.
       - name: Index review
-        uses: JingYu-creates20/sql-index-advisor@v0
+        uses: JingYu-create520/sql-index-advisor@v0
         with:
           path: src/main/resources/mapper
           min-severity: warn
           mysql-version: "8.0"
           fail-on: "off"
 
-      # 可选：把完整 JSON 报告留成产物，方便 agent 或人工复核。
+      # Optional: keep the full JSON report as an artifact for an agent or a human to re-check.
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
@@ -40,7 +41,7 @@ jobs:
           path: sia-report.json
           if-no-files-found: ignore
 
-      # 可选：让 DBA 直接拿到可评审的迁移文件。
+      # Optional: hand the DBA a reviewable migration file directly.
       - name: Emit migration SQL
         run: |
           sia src/main/resources/mapper \
