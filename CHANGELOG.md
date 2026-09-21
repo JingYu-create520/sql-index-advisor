@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prefix warning appears in both languages. Reproduced on the bundled example:
   `SELECT id FROM orders WHERE user_id = 1 AND shop_id = 2` against
   `examples/schema.json` now names `idx_user(user_id, pay_time)`.
-- **GitHub Action gate step**: exit code `2` (the tool could not run — bad path,
+- **GitHub Action gate step**: exit code `2` (the tool could not run, bad path,
   unreadable input) was reported exactly like `1` (findings at or above
   `--fail-on`), and because Actions executes `run:` blocks under `bash -e` the
   explanatory `::error::` line never reached the log. Each case now prints its
@@ -30,7 +30,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- README: "Where it got it wrong" — the four concrete false positives this tool
+- README: "Where it got it wrong": the four concrete false positives this tool
   emitted during development (prefix-redundant pairs, single-column indexes on
   boolean flags, a `SELECT` alias indexed as a column, one query pattern split
   into two fingerprints), what each one does now, and which test pins it. Plus
@@ -44,7 +44,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   copyright line now does too.
 - Replaced a guess in the docs with a measurement: `information_schema` was
   probed on a live MySQL 8.0.46 to see whether index statistics could drive the
-  flag-column decision in SIA001 instead of column names. They cannot —
+  flag-column decision in SIA001 instead of column names. They cannot.
   `STATISTICS.CARDINALITY` reported 1 for a 2-valued `TINYINT` column before and
   after `ANALYZE TABLE`, and 42 for the primary key of a table loaded with
   100,000 rows, because it estimates per index *prefix*. `docs/rules.md` now
@@ -53,7 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.1.0 — 2026-09-20
 
-First release. Core premise: index advice you can verify — every finding carries
+First release. Core premise: index advice you can verify: every finding carries
 a rule ID, the evidence SQL, and a DDL a human can read before running it.
 
 ### Added
@@ -77,7 +77,7 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   equality → group/order → range, because a range predicate stops later columns
   from serving equality lookups or sorting.
 - **Rule engine** with input-dependency gating: rules declare `needsSchema` and
-  `needsMetrics`, and every skipped rule is reported with the reason — silence is
+  `needsMetrics`, and every skipped rule is reported with the reason: silence is
   never rendered as "all clear". A throwing rule is contained and surfaced.
 - **Reports**: coloured terminal table (`--lang auto|zh|en`), stable JSON, GitHub
   workflow annotations with `file`/`line`/`title`, and `--emit-sql` migration
@@ -90,7 +90,7 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   exposing `analyze_sql` / `analyze_slow_log` / `analyze_mapper` /
   `explain_rules`, an Agent Skill, and a composite GitHub Action.
 - **Exit codes**: `0` clean, `1` findings at or above `--fail-on` (default
-  `error`), `2` runtime error — so first-time adoption does not turn a green
+  `error`), `2` runtime error, so first-time adoption does not turn a green
   build red.
 - `examples/schema-dump.sql` — pure `information_schema` query to produce
   `schema.json` without the tool ever connecting to a database.
@@ -106,7 +106,7 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   suggestions came back of which two were strictly narrower than others on the same
   table (`(sku_id)` alongside `(sku_id, warehouse_id)`). The engine now drops a
   proposal that is a left prefix of another and records the coverage on the survivor.
-- **SIA001 treated a lone boolean/flag column as ordinary advice** — the classic
+- **SIA001 treated a lone boolean/flag column as ordinary advice**: the classic
   low-selectivity index. Such suggestions are capped at `info` and carry the
   distinct-value query to run first.
 - **`schema-dump.sql` emitted invalid JSON**: `CAST(... AS JSON)` sat inside a
@@ -126,7 +126,7 @@ a rule ID, the evidence SQL, and a DDL a human can read before running it.
   fingerprints and weakening exactly the aggregation the slow-log report depends
   on. `+7` had the same defect.
 - The CI smoke step inherited the runner's `bash -e`, so the CLI's legitimate exit
-  code 1 killed the step before it could be judged — and its assertions lacked
+  code 1 killed the step before it could be judged, and its assertions lacked
   `|| exit 1`, so a broken check could have passed silently.
 
 ### Verified against a live database
@@ -135,7 +135,7 @@ MySQL 8.0.46 in Docker, seeded with `examples/seed-schema.sql`: the dump produce
 valid `schema.json`; the recommended `(user_id, status, create_time)` executes as
 written; and `EXPLAIN` for the target query goes from the partial `idx_user_pay`
 with `Using filesort` and 23 estimated rows, to the new index with **1 estimated row
-and no filesort**. Verified on 8.0 only — 5.7 remains uninspected.
+and no filesort**. Verified on 8.0 only; 5.7 remains uninspected.
 
 ### Known limitations
 
