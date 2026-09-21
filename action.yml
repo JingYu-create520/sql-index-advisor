@@ -117,14 +117,24 @@ runs:
         CLI: ${{ inputs.cli }}
       shell: bash
       run: |
+        # Actions runs `run:` blocks under `bash -e`, so a non-zero exit would
+        # abort this step before the reason is printed. Exit 1 means "there are
+        # findings at or above --fail-on"; exit 2 means the tool itself failed.
+        # Those two must not read the same in a build log.
+        set +e
         ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
           --format json \
           --fail-on "${FAIL_ON}" \
           --mysql-version "${MYSQL_VERSION}" \
           ${EXTRA_ARGS} > /dev/null
         code=$?
+        set -e
         if [ "$code" = "1" ]; then
           echo "::error::sql-index-advisor found issues at or above '${FAIL_ON}'. See the step summary."
+          exit 1
+        fi
+        if [ "$code" != "0" ]; then
+          echo "::error::sql-index-advisor exited with $code: the tool failed to run (bad path, unreadable input). The gate itself never evaluated anything."
           exit 1
         fi
         exit 0
