@@ -17,8 +17,9 @@ import { parseSlowLog } from "../parsers/slowlog.js";
 import { mapperStatementsToRecords, parseMapperText } from "../parsers/mapper.js";
 import { loadInput } from "../core/input.js";
 import { validateSchema } from "../schema/loader.js";
+import { VERSION } from "../version.js";
 
-export { VERSION } from "../version.js";
+export { VERSION };
 
 export const INSTRUCTIONS = [
   "sql-index-advisor：MySQL / MyBatis 离线索引顾问。",
