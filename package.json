@@ -13,7 +13,7 @@
     "mcp"
   ],
   "license": "MIT",
-  "author": "JingYu-creates20",
+  "author": "JingYu-create520",
   "type": "module",
   "bin": {
     "sia": "./dist/cli.js",

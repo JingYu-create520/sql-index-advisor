@@ -1,6 +1,6 @@
 name: "SQL Index Advisor"
 description: "Offline MySQL/MyBatis index review on every PR: mapper XML or slow log in, line-level annotations out."
-author: "JingYu-creates20"
+author: "JingYu-create520"
 
 branding:
   icon: "database"
