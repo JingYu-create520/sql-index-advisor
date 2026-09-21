@@ -227,7 +227,7 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
       covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
 ```
 
-**这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告；真正偏斜到只有一行为真的列，也拿到同样的警告。要知道真相就得统计信息，而那就意味着连你的数据库——见上一节。这个缺口不是待办，只能由建议旁边那条验证 SQL 来补。
+**这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告；真正偏斜到只有一行为真的列，也拿到同样的警告。最"显然"的升级路径——直接读数据库自己的统计信息——已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 **1**，`ANALYZE TABLE` 前后都是 1；对一张刚灌进 10 万行的表，它给主键报 **42**。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE … UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
 

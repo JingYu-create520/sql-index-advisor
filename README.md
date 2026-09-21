@@ -236,7 +236,7 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
       covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
 ```
 
-**What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. Without statistics — which would mean connecting to your database, see above — that gap cannot be closed by a rule, only by the selectivity query printed next to the suggestion.
+**What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. The obvious upgrade — read the database's own statistics instead of guessing from names — was measured and rejected: `information_schema.STATISTICS.CARDINALITY` reported **1** for a column with 2 distinct values, both before and after `ANALYZE TABLE`, and **42** for the primary key of a table that had just been loaded with 100,000 rows. It is a per-index-prefix sample, and low-cardinality columns are exactly where it is worst. The only source that gets it right, `information_schema.COLUMN_STATISTICS`, is 8.0-only and empty until someone runs `ANALYZE TABLE … UPDATE HISTOGRAM` on that specific column. Full numbers in [docs/rules.md](docs/rules.md). So the gap stays, and it is closed per-finding by the selectivity query printed next to the suggestion.
 
 ## What has not been verified
 

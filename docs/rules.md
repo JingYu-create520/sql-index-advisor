@@ -27,6 +27,13 @@
 
 **降级但保留**：单列布尔/标志位（类型 `tinyint`/`bit`/`bool`，或列名命中 `is_`、`has_`、`enabled`、`deleted`、`synced`、`status`、`type` 等）不会消失，但被压到 `info`，并附上要先跑的区分度 SQL。判据只有列名和类型——本工具看不到数据，所以 40 个取值的 `status` 和 2 个取值的 `status` 拿到同样的警告，这是能力边界不是待办。复合索引里的标志位不降级，`(sku_id, synced)` 的区分度由 `sku_id` 承担。
 
+**为什么不用统计信息代替列名（2026-09-21 在 MySQL 8.0.46 上实测过）。** 两个"看起来现成"的来源都不够格：
+
+- `information_schema.STATISTICS.CARDINALITY` 是**按索引前缀**的采样估计，不是列自己的 NDV。demo 库里 `user_address` 的复合索引 `(user_id, is_default)` 第 2 列报 20,189，而 `is_default` 真只有 2 个取值。一个 `TINYINT` 列单独建索引后，CARDINALITY 在 `ANALYZE TABLE` 前后都报 **1**（真值 2）；一张刚灌完 10 万行的表，`PRIMARY` 的 CARDINALITY 报 **42**。也就是说：低基数恰好是这条规则要判的场景，而统计信息在这个场景下最不准。
+- `information_schema.COLUMN_STATISTICS`（只有 8.0 有）能给出正确答案——`ANALYZE TABLE orders UPDATE HISTOGRAM ON status` 之后是 3 个桶的 singleton 直方图，累计频率 0.33 / 0.67 / 1.0。但它默认**一行都没有**，必须 DBA 显式对那一列跑过 ANALYZE；拿它当依据，等于让建议的准确度取决于"你有没有恰好给这列建过统计"。
+
+所以 SIA001 继续用列名 + 声明类型的启发式，并把该跑的区分度 SQL 印在旁边。真要升级成基于直方图的判定，代价是明确的：`schema.json` 多一个字段、只支持 8.0、并且必须把"这列没有统计信息"和"这列统计显示它就是 2 个值"区分成两种不同输出。
+
 **跨查询去重**：同一次运行里，如果一条建议的列是另一条更宽建议的最左前缀，窄的那条会被引擎丢掉（建了两个索引不多覆盖任何查询，只多一份写放大），存活的那条会在文案里说明自己吞掉了几个指纹。
 
 **没有 schema 时**：降级为 `info` 级别的"候选"，并明说"无法确认是否已有索引覆盖，请提供 `--schema`"。

@@ -37,6 +37,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "What has not been verified", listing MySQL 5.7, the Action on a real PR, and
   MCP inside a client.
 
+### Changed
+
+- `LICENSE`, `package.json` and `action.yml` named an author handle that is not
+  a GitHub account; the repository lives under `JingYu-create520`, so the
+  copyright line now does too.
+- Replaced a guess in the docs with a measurement: `information_schema` was
+  probed on a live MySQL 8.0.46 to see whether index statistics could drive the
+  flag-column decision in SIA001 instead of column names. They cannot —
+  `STATISTICS.CARDINALITY` reported 1 for a 2-valued `TINYINT` column before and
+  after `ANALYZE TABLE`, and 42 for the primary key of a table loaded with
+  100,000 rows, because it estimates per index *prefix*. `docs/rules.md` now
+  carries those numbers and the reason `COLUMN_STATISTICS` histograms were also
+  rejected (8.0-only, and empty until a DBA analyzes that exact column).
+
 ## 0.1.0 — 2026-09-20
 
 First release. Core premise: index advice you can verify — every finding carries
