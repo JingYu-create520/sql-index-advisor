@@ -6,7 +6,7 @@
 
 ![终端输出：三条建议带规则号、证据 SQL、改写语句，以及生成的迁移文件](docs/assets/terminal-demo.png)
 
-所有结论由确定性规则产生——可复现、可单测、**无需 API key**。LLM 只是可选的文案润色层，它无法新增、删除或重排任何一条建议。
+所有结论都由确定性规则产生，因此可复现、可单测、不需要 API key。LLM 只是可选的文案润色层，它无法新增、删除或重排任何一条建议。
 
 <details>
 <summary>同样内容的纯文本版（方便复制）</summary>
@@ -40,15 +40,15 @@ ALTER TABLE `orders` ADD INDEX `idx_orders_user_id_status_create_time` (`user_id
 
 </details>
 
-上面每一行都带**规则 ID**、**证据 SQL** 和**可直接阅读的 DDL**。这就是它的设计前提：不是黑箱。
+上面每一行都带规则 ID、判定所依据的 SQL，以及一条你可以先读懂再执行的 DDL。不喜欢某个结论时，你能追溯到它是哪个条件产生的。
 
 English docs: [README.md](README.md)。
 
 ---
 
-## 为什么不直接问大模型
+## 和大模型直接问的区别
 
-因为你无法评审一个你无法复现的东西。
+你没法签字确认一个你没法复现的建议，这个工具就是冲着这一点做的。
 
 | | 直接问模型 | sql-index-advisor |
 |---|---|---|
@@ -90,18 +90,18 @@ sia mapper src/main/resources/mapper --emit-sql migrations.sql
 sia examples/slow.log --format json
 ```
 
-### 搞一个 `schema.json`（精度就靠它）
+### 搞一个 `schema.json`
 
-工具**不连数据库**。用一条纯 `information_schema` 查询自己导出（已在真实 MySQL 8.0.46 上跑通）：
+拿不准的那几条规则，是拿你的查询和现有索引做比较的规则，它们需要这个文件。工具不连数据库，所以由你自己导：一条纯 `information_schema` 查询（已在真实 MySQL 8.0.46 上跑通）。
 
 ```bash
 mysql --database=your_db --raw --skip-column-names < examples/schema-dump.sql > schema.json
 sia slow.log --schema schema.json
 ```
 
-没有它，依赖现有索引的规则（`SIA002` / `SIA003` / `SIA005` / `SIA007`）会保持沉默，而且报告会明确告诉你它们为什么沉默。**沉默永远不会被报告成"没问题"。**
+没有它，`SIA002` / `SIA003` / `SIA005` / `SIA007` 会保持沉默，而且报告会明确说明它们为什么沉默。沉默永远不会被渲染成"没问题"。
 
-### 想看完整闭环？
+### 完整闭环，跑在真库上
 
 `examples/seed-schema.sql` 会建一个"故意少建索引"的库（20 万订单、40 万订单明细），让建议有真实靶子：
 
@@ -116,7 +116,7 @@ docker exec -i sia-mysql mysql -uroot -psia demo < add-indexes.sql
 docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders WHERE user_id=42 AND status='PAID' ORDER BY create_time DESC LIMIT 20\G"
 ```
 
-最后一条就是回报。改之前 `EXPLAIN` 只能退到不完整的 `idx_user_pay`，估算扫 23 行且带 `Using filesort`；用上推荐的 `(user_id, status, create_time)` 之后估算 **1 行**，filesort 消失。
+改之前 `EXPLAIN` 只能退到不完整的 `idx_user_pay`，估算扫 23 行且带 `Using filesort`。用上推荐的 `(user_id, status, create_time)` 之后估算 1 行，filesort 消失。
 
 ## 规则
 
@@ -124,13 +124,13 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 |---|---|---|---|
 | SIA001 | 缺失索引候选 | — | 访问路径无可用索引；列顺序按**等值 → 排序/GROUP BY → 范围** |
 | SIA002 | 前缀索引 | schema | 过长的 `VARCHAR` / `TEXT` 进入谓词；阈值按**字节**算，不是 utf8mb3 时代的"255" |
-| SIA003 | 最左前缀违反 | schema | 跳过复合索引中间列——`EXPLAIN` 的 `key` 看不出来，`key_len` 才看得出来 |
-| SIA004 | 索引列上使用函数 | — | `DATE(create_time) = ?` → 左闭右开区间改写；8.0 另给函数索引方案 |
-| SIA005 | 隐式类型转换 | schema | `varchar列 = 123`（只有这个方向真的会让索引失效） |
+| SIA003 | 最左前缀违反 | schema | 跳过复合索引中间列，`EXPLAIN` 的 `key` 看不出来，`key_len` 才看得出来 |
+| SIA004 | 索引列上使用函数 | — | `DATE(create_time) = ?` → 左闭右开区间改写，8.0 另给函数索引方案 |
+| SIA005 | 隐式类型转换 | schema | `varchar列 = 123`，只有这个方向真的会让索引失效 |
 | SIA006 | 深分页 | — | 字面量 `LIMIT 100000, 20` → 延迟关联 + 游标两种改写 |
 | SIA007 | 覆盖索引机会 | schema + 慢日志 | 扫描行数高但投影窄 → 扩展索引消除回表 |
 
-每条规则的完整判定依据、误报边界和示例：**[docs/rules.md](docs/rules.md)**。
+每条规则的完整判定依据、误报边界和示例：**[docs/rules.md](docs/rules.md)**。工具为什么长成现在这样：[docs/DESIGN-NOTES.md](docs/DESIGN-NOTES.md)。
 
 ## 输出形态
 
@@ -143,11 +143,11 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 
 其他参数：`--min-severity warn` · `--fail-on error` · `--top 20` · `--mysql-version 5.7` · `--prefix-bytes 3072` · `--deep-offset 10000` · `--rules SIA001,SIA004` · `--llm`。
 
-**退出码**：`0` 没有达到 `--fail-on` 的问题 · `1` 有 · `2` 运行错误。默认 `--fail-on error`，所以第一次接到老项目上不会立刻把构建搞红。
+退出码：`0` 没有达到 `--fail-on` 的问题 · `1` 有 · `2` 运行错误。默认 `--fail-on error`，所以第一次接到老项目上不会立刻把构建搞红。
 
 ## 接到 AI 编码助手里
 
-**MCP server** —— 写进 `claude_desktop_config.json`、Qoder 的 MCP 配置或 `.cursor/mcp.json`：
+**MCP server**，写进 `claude_desktop_config.json`、Qoder 的 MCP 配置或 `.cursor/mcp.json`。全局装好之后短形式是：
 
 ```json
 {
@@ -160,11 +160,13 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 }
 ```
 
-四个工具：`analyze_sql`、`analyze_slow_log`、`analyze_mapper`、`explain_rules`。不想到处全局安装就用 `command: "npx"` + `args: ["--yes", "--package", "github:JingYu-create520/sql-index-advisor", "sia", "--", "mcp"]`；本地仓库则用 `command: "node"` + `args: ["dist/mcp.js"]`（或 `sia-mcp`）。每个工具都接受内联 `schema`（JSON 文本或路径都行），所以没有文件系统的 agent 也能拿到基于现有索引的精确建议。
+不想全局装就用 `command: "npx"` + `args: ["--yes", "--package", "github:JingYu-create520/sql-index-advisor", "sia", "--", "mcp"]`；本地仓库则用 `command: "node"` + `args: ["dist/mcp.js"]`（或 `sia-mcp`）。
 
-**Agent Skill** —— `skills/sql-index-advisor/SKILL.md` 教会 agent 什么时候调用、怎么读 `Finding`、以及必须守住的红线（不代为执行 DDL、建议必须带规则号、必须把 `skipped` 说出来）。
+四个工具：`analyze_sql`、`analyze_slow_log`、`analyze_mapper`、`explain_rules`。每个工具都接受内联 `schema`（JSON 文本或路径都行），所以没有文件系统的 agent 也能拿到基于现有索引的精确建议。
 
-**GitHub Action** —— 在改动的行上直接评论：
+**Agent Skill**，`skills/sql-index-advisor/SKILL.md` 教会 agent 什么时候调用、怎么读 `Finding`、以及必须守住的红线：不代为执行 DDL、建议必须带规则号、必须把 `skipped` 说出来。
+
+**GitHub Action**，在改动的行上直接评论：
 
 ```yaml
 - uses: JingYu-create520/sql-index-advisor@v0
@@ -177,7 +179,7 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 
 完整示例工作流：[`examples/github-action/pr-review.yml`](examples/github-action/pr-review.yml)。
 
-## LLM 层（可选，且不参与决策）
+## LLM 层（可选，不参与决策）
 
 ```bash
 export SIA_LLM_BASE_URL=https://api.openai.com/v1   # 任意 OpenAI 兼容端点
@@ -188,38 +190,38 @@ sia slow.log --llm
 
 默认关闭：不需要 key、不联网、文案确定。开启后端点只被要求补充运维提示（"加索引前先确认这张表的写入频率"），结果落在 `finding.llmNote`。超时或 5xx 会退回内置模板，所以端点抖动不可能弄坏 CI 门禁。
 
-## 这个工具刻意不做的事
+## 这个工具不做的事
 
-- **不连数据库。** 没有 `EXPLAIN`，没有实时统计。只读文件分析，因此能放进沙箱化的 CI job。（`--explain` 模式排在 v2。）
-- **不执行任何东西。** 只把 `ALTER TABLE` 文本写进文件交人评审，永不生成 `DROP`。
-- **不自动建索引。** 建索引是带业务上下文的写放大决策，这个决策留在你手上。
-- **只支持 MySQL**，不做 PostgreSQL 和其他方言。
-- **宁可沉默也不猜。** 已知边界全部写在这里，不打补丁式遮掩：
-  - Mapper 里的 `LIMIT #{offset}, #{size}` 没有静态值 → SIA006 判不了。这种情况请把慢日志喂进来。
-  - `mobile = ?` 绑的是 Java `Long` → SIA005 看不见参数类型。
-  - 相关子查询不展开；SIA006 会降级成只给模板，也不敢给出可能改变结果集的改写。
+- 不连数据库。没有 `EXPLAIN`，没有实时统计，只读文件分析，因此能放进沙箱化的 CI job。`--explain` 模式排在 v2。
+- 不执行任何东西。只把 `ALTER TABLE` 文本写进文件交人评审，而且永不生成 `DROP`。
+- 不替你做决策。建索引是带业务上下文的写放大决策，这个决策留在你手上。
+- 只支持 MySQL，不做 PostgreSQL 和其他方言。
+- 宁可沉默也不猜。已知边界全部写在这里，不做遮掩：
+  - Mapper 里的 `LIMIT #{offset}, #{size}` 没有静态值，SIA006 判不了，这种情况请把慢日志喂进来。
+  - `mobile = ?` 绑的是 Java `Long`，SIA005 看不见参数类型。
+  - 相关子查询不展开。SIA006 会降级成只给模板，不敢给出可能改变结果集的改写。
 
-支持的 SQL 子集：单条 `SELECT` / `INSERT` / `UPDATE` / `DELETE`，ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给出 `info` 提示——不会崩，也不会编造建议。
+支持的 SQL 子集：单条 `SELECT` / `INSERT` / `UPDATE` / `DELETE`，ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。
 
 ## 它答错过的地方
 
-下面每一条都是本工具在真实 SQL 上真给出过的建议，而且每一条都是错的。把它们写出来，比让你自己撞见便宜。
+下面每一条都是本工具在真实 SQL 上真给出过的建议，而且每一条都是错的。写出来比让你自己撞见便宜。
 
-**一条索引能覆盖的事，报了两次。** `WHERE sku_id = ?` 和另一条 `WHERE sku_id = ? AND warehouse_id = ?`，曾经会在同一张表上同时产出 `(sku_id)` 和 `(sku_id, warehouse_id)`。窄的是宽的最左前缀，建了不多覆盖任何东西，只多一份写放大。现在引擎在排序后跑一轮前缀冗余消除：窄的那条被丢掉，活下来的那条会说明自己吞掉了谁（`该索引同时覆盖另外 N 条查询的条件，无需重复建。`）。对应测试是 `tests/engine.test.ts` 里的 `drops a narrower index that the wider one already serves`，另外语料层还断言了"同一次运行里不可能有两条建议互为前缀"。
+**一条索引能覆盖的事，报了两次。** `WHERE sku_id = ?` 和另一条 `WHERE sku_id = ? AND warehouse_id = ?`，曾经会在同一张表上同时产出 `(sku_id)` 和 `(sku_id, warehouse_id)`。窄的那条是宽的那条的最左前缀，建了不多覆盖任何东西，只多一份写放大。现在引擎在排序后跑一轮前缀冗余消除：窄的那条被丢掉，活下来的那条会说明自己吞掉了谁（`该索引同时覆盖另外 N 条查询的条件，无需重复建。`）。对应测试是 `tests/engine.test.ts` 里的 `drops a narrower index that the wider one already serves`，另外语料层还断言了"同一次运行里不可能有两条建议互为前缀"。
 
-**给布尔标志位建索引。** `WHERE enabled = 0` 曾经会产出 `ADD INDEX (enabled)`。几百万行、两个取值的列，优化器根本不会选它——这种建议正是"索引顾问"被卸载的原因。现在单列标志位（类型是 `tinyint`/`bit`/`bool`，或者列名匹配 `is_`、`has_`、`enabled`、`deleted`、`synced`、`status`、`type` 等）依然会报，因为"极少为真且很热"的标志位确实该建，但它被压到 `info`，并且附带要先跑的验证语句：
+**给布尔标志位建索引。** `WHERE enabled = 0` 曾经会产出 `ADD INDEX (enabled)`。几百万行、两个取值的列，优化器根本不会选它，而这种建议正是"索引顾问"被卸载的原因。现在单列标志位（类型是 `tinyint`/`bit`/`bool`，或者列名匹配 `is_`、`has_`、`enabled`、`deleted`、`synced`、`status`、`type` 等）依然会报，因为"极少为真且很热"的标志位确实该建，但它被压到 `info`，并且附带要先跑的验证语句：
 
 ```sql
 SELECT COUNT(DISTINCT enabled) / COUNT(*) FROM stock;
 ```
 
-复合索引里的标志位不扣分：`(sku_id, synced)` 是好索引，区分度由 `sku_id` 承担。这两面都被测试钉住了。
+复合索引里的标志位不扣分，`(sku_id, synced)` 是好索引，因为区分度由 `sku_id` 承担。这两面都被测试钉住了。
 
-**给一个不存在的列建索引。** `SELECT SUM(amount) AS gmv ... ORDER BY gmv` 曾经要给 `gmv` 建索引，而它是输出别名，压根不是列。另一条 `WHERE amount > 1e999` 会给一个叫 `e999` 的列建索引，因为分词器把科学计数法字面量读成了"数字 + 标识符"。两处都已修复；`e999` 那个是生成语料发现的，不是手写用例发现的——这就是语料存在的理由。
+**给一个不存在的列建索引。** `SELECT SUM(amount) AS gmv ... ORDER BY gmv` 曾经要给 `gmv` 建索引，而它是输出别名，压根不是列。另一条 `WHERE amount > 1e999` 会给一个叫 `e999` 的列建索引，因为分词器把科学计数法字面量读成了"数字加标识符"。两处都已修复，而 `e999` 那个是生成语料发现的、不是手写用例发现的，这就是语料存在的理由。
 
-**同一条查询被算成两条。** 带符号字面量当年没被归一化，`-1` 和 `1` 会把一个查询模式裂成两个指纹，于是它的 `Rows_examined` 被对半砍、排名也往后掉——工具把自己最该报的那条藏了起来。现在"跨字面量、跨正负号、跨 `IN (...)` 长度的指纹稳定性"是被断言的性质。
+**同一条查询被算成两条。** 带符号字面量当年没被归一化，`-1` 和 `1` 会把一个查询模式裂成两个指纹，于是它的 `Rows_examined` 被对半砍、排名也往后掉，等于工具把自己最该报的那条藏了起来。现在"跨字面量、跨正负号、跨 `IN (...)` 长度的指纹稳定性"是被断言的性质。
 
-**两种语言互相矛盾。** 中文文案会写"已有索引只覆盖前缀，新索引可用后评估是否下线旧索引"，而英文字段在同一分支下却直接断言"no existing index serves this access path"。少翻译了一个分支，而读 `messageEn` 的 JSON / MCP 使用者拿到的是一句错误的"没问题"。现在英文与中文走同样三个分支，并有测试钉住"前缀警告必须同时出现在两边"：
+**两种语言互相矛盾。** 中文文案会写"已有索引只覆盖前缀，新索引可用后评估是否下线旧索引"，而英文字段在同一分支下却直接断言 "no existing index serves this access path"。少翻译了一个分支，而读 `messageEn` 的 JSON、MCP 使用者拿到的是假的安全结论。现在英文与中文走同样三个分支，并有测试钉住"前缀警告必须同时出现在两边"：
 
 ```
 warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality -> group/order -> range;
@@ -227,11 +229,11 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
       covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
 ```
 
-**这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告；真正偏斜到只有一行为真的列，也拿到同样的警告。最"显然"的升级路径——直接读数据库自己的统计信息——已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 **1**，`ANALYZE TABLE` 前后都是 1；对一张刚灌进 10 万行的表，它给主键报 **42**。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE … UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
+**这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
 
-- `examples/schema-dump.sql` 只在真实 MySQL **8.0.46** 上跑通过。5.7 从未执行过；`--mysql-version 5.7` 改的是本工具输出的 DDL 文本，不构成对 5.7 服务器的任何证据。
+- `examples/schema-dump.sql` 只在真实 MySQL 8.0.46 上跑通过。5.7 从未执行过，`--mysql-version 5.7` 改的是本工具输出的 DDL 文本，不构成对 5.7 服务器的任何证据。
 - GitHub Action 的注解字符串只在本地断言过。这个 Action 还没有在任何人的 PR 上作为状态检查跑过。
 - MCP server 在测试里完成了真实的 stdio `initialize` → `tools/list` → `tools/call` 握手，但没有在某个具体桌面客户端里配置过。
 
@@ -247,12 +249,12 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-207 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份"脏"的：有 administrator command、多行语句和一条没闭合的尾部语句。
+207 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 
-MIT —— 见 [LICENSE](LICENSE)。
+MIT，见 [LICENSE](LICENSE)。
 
 ## 同一作者的其他项目
 
-- **spring-review** —— 同样的思路用在 Spring 事务失效、N+1 和 MyBatis XML 里的 `${}` 注入。
+- **spring-review**，同样的思路用在 Spring 事务失效、N+1 和 MyBatis XML 里的 `${}` 注入。
