@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **SIA001 said different things in the two languages.** The Chinese message
+  warns that an existing index covers only a left prefix of the proposed one and
+  should be evaluated for removal; `messageEn` skipped that branch and asserted
+  "no existing index serves this access path" instead. Consumers reading JSON,
+  `--lang en`, or the MCP tools got a false all-clear on a `warn` finding. The
+  English text now mirrors the same three branches (no schema / prefix covered /
+  nothing serving), keeps the oversized-column caveat, and a test asserts the
+  prefix warning appears in both languages. Reproduced on the bundled example:
+  `SELECT id FROM orders WHERE user_id = 1 AND shop_id = 2` against
+  `examples/schema.json` now names `idx_user(user_id, pay_time)`.
 - **GitHub Action gate step**: exit code `2` (the tool could not run — bad path,
   unreadable input) was reported exactly like `1` (findings at or above
   `--fail-on`), and because Actions executes `run:` blocks under `bash -e` the

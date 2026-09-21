@@ -228,6 +228,14 @@ A flag *inside* a composite is not penalised: `(sku_id, synced)` is a fine index
 
 **The same query counted twice.** Signed literals were not masked during normalization, so `-1` and `1` split one query pattern into two fingerprints — halving its recorded `Rows_examined` and pushing it down the ranking, i.e. the tool hid its own worst offender. Fingerprint stability across literal values, signs and `IN (...)` lengths is now an asserted property.
 
+**The two languages disagreed.** The Chinese message warned "an existing index covers only a left prefix — evaluate dropping it once the new one is live"; the English field for that same finding said, flatly, "no existing index serves this access path." One branch of the code never got the caveat translated, so JSON and MCP consumers — which read `messageEn` — received a false all-clear. The English text now mirrors the same three branches as the Chinese one, and a test asserts the prefix caveat shows up in both:
+
+```
+warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality -> group/order -> range;
+      only a contiguous run from the first column can be used. Existing index idx_user(user_id, pay_time)
+      covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
+```
+
 **What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. Without statistics — which would mean connecting to your database, see above — that gap cannot be closed by a rule, only by the selectivity query printed next to the suggestion.
 
 ## What has not been verified
@@ -248,7 +256,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-206 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates ~1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` + a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+207 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates ~1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` + a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 

@@ -219,6 +219,14 @@ SELECT COUNT(DISTINCT enabled) / COUNT(*) FROM stock;
 
 **同一条查询被算成两条。** 带符号字面量当年没被归一化，`-1` 和 `1` 会把一个查询模式裂成两个指纹，于是它的 `Rows_examined` 被对半砍、排名也往后掉——工具把自己最该报的那条藏了起来。现在"跨字面量、跨正负号、跨 `IN (...)` 长度的指纹稳定性"是被断言的性质。
 
+**两种语言互相矛盾。** 中文文案会写"已有索引只覆盖前缀，新索引可用后评估是否下线旧索引"，而英文字段在同一分支下却直接断言"no existing index serves this access path"。少翻译了一个分支，而读 `messageEn` 的 JSON / MCP 使用者拿到的是一句错误的"没问题"。现在英文与中文走同样三个分支，并有测试钉住"前缀警告必须同时出现在两边"：
+
+```
+warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality -> group/order -> range;
+      only a contiguous run from the first column can be used. Existing index idx_user(user_id, pay_time)
+      covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
+```
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告；真正偏斜到只有一行为真的列，也拿到同样的警告。要知道真相就得统计信息，而那就意味着连你的数据库——见上一节。这个缺口不是待办，只能由建议旁边那条验证 SQL 来补。
 
 ## 尚未验证的部分
@@ -239,7 +247,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-206 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份"脏"的：有 administrator command、多行语句和一条没闭合的尾部语句。
+207 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份"脏"的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

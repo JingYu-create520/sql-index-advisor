@@ -25,6 +25,10 @@
 
 **不报的情况**：单列等值已经是主键或唯一键（`WHERE order_no = ? AND status = ?` 走唯一索引就已经是单行定位，再加索引只是写放大）；等值前缀已被现有索引覆盖（交给 SIA003 判断"跳过中间列"的问题，避免同一条建议出两遍）；`SELECT` 里的输出别名（`ORDER BY gmv`，gmv 是 `SUM(amount) AS gmv`，根本不是列）。
 
+**降级但保留**：单列布尔/标志位（类型 `tinyint`/`bit`/`bool`，或列名命中 `is_`、`has_`、`enabled`、`deleted`、`synced`、`status`、`type` 等）不会消失，但被压到 `info`，并附上要先跑的区分度 SQL。判据只有列名和类型——本工具看不到数据，所以 40 个取值的 `status` 和 2 个取值的 `status` 拿到同样的警告，这是能力边界不是待办。复合索引里的标志位不降级，`(sku_id, synced)` 的区分度由 `sku_id` 承担。
+
+**跨查询去重**：同一次运行里，如果一条建议的列是另一条更宽建议的最左前缀，窄的那条会被引擎丢掉（建了两个索引不多覆盖任何查询，只多一份写放大），存活的那条会在文案里说明自己吞掉了几个指纹。
+
 **没有 schema 时**：降级为 `info` 级别的"候选"，并明说"无法确认是否已有索引覆盖，请提供 `--schema`"。
 
 ## SIA002 · 前缀索引 · S
@@ -138,12 +142,15 @@ interface Finding {
   rowsExamined?: number;
   occurrences?: number;
   message: string;        // 中文原理说明
-  messageEn: string;      // 英文摘要
+  messageEn: string;      // 同等信息量的英文文案（不是摘要：两条分支的警告必须两边都在）
   llmNote?: string;       // 仅 --llm 追加，不参与任何判定
   suggestedDDL: string[]; // 只有 ADD INDEX，永不出现 DROP
   rewrite?: string;
   needsSchema: boolean;
   needsMetrics: boolean;
+  indexColumns?: string[];      // 建议索引的列顺序；引擎据此做前缀冗余消除
+  lowCardinalityRisk?: boolean; // 单列标志位：压到 info，并附区分度验证 SQL
+  coveredFingerprints?: string[]; // 因本条更宽而被吞掉的窄建议指纹
 }
 ```
 

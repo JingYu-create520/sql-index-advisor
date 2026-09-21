@@ -51,8 +51,28 @@ describe("SIA001 missing index candidate", () => {
     ]);
   });
 
-  it("negative: primary key lookup needs no new index", () => {
-    expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10", { schema: TEST_SCHEMA })).toEqual([]);
+  it("both languages carry the existing-prefix caveat, and neither claims it is clean", () => {
+    const schema = structuredClone(TEST_SCHEMA);
+    schema.tables
+      .find((t) => t.name === "order_item")!
+      .indexes.push({ name: "idx_order_id", columns: ["order_id"], unique: false, primary: false });
+
+    const findings = runRule(
+      sia001,
+      "SELECT id FROM order_item WHERE order_id = 5 AND sku_id = 7",
+      { schema },
+    );
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("warn");
+    expect(finding.message).toContain("已有索引 idx_order_id(order_id)");
+    // The English text used to assert "no existing index serves this access
+    // path" on exactly this branch, which is simply false.
+    expect(finding.messageEn).toContain("idx_order_id(order_id)");
+    expect(finding.messageEn).not.toMatch(/no existing index serves/i);
+  });
+
+  it("negative: primary key lookup needs no new index", () => {    expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10", { schema: TEST_SCHEMA })).toEqual([]);
     expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10")).toEqual([]);
   });
 

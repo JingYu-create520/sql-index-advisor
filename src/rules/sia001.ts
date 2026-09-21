@@ -88,12 +88,12 @@ export const sia001: Rule = {
           buildMessage(bucket, usable, dropped, table ? prefixHit : undefined),
           ...(lowCardinalityRisk ? [FLAG_CAUTION] : []),
         ].join(" "),
-        messageEn:
-          `Candidate index for ${bucket.table} (${usable.join(", ")})` +
-          (table
-            ? `; no existing index serves this access path.`
-            : `; pass --schema to confirm nothing already covers it.`) +
-          (lowCardinalityRisk ? " Low-cardinality column: check its distinct-value ratio before creating it." : ""),
+        messageEn: [
+          buildMessageEn(bucket, usable, dropped, table ? prefixHit : undefined, !!table),
+          ...(lowCardinalityRisk
+            ? ["Low-cardinality column: check its distinct-value ratio before creating it."]
+            : []),
+        ].join(" "),
       });
     }
 
@@ -180,7 +180,8 @@ function resolvesByUniqueLookup(
 }
 
 /** True when some existing index already serves every equality column of this table. */
-function equalityAlreadyIndexed(  table: SchemaTable | undefined,
+function equalityAlreadyIndexed(
+  table: SchemaTable | undefined,
   bucket: TableBucket,
 ): boolean {
   if (!table) return false;
@@ -228,6 +229,41 @@ function buildMessage(
   }
   if (dropped.length > 0) {
     parts.push(`列 ${dropped.join(", ")} 单列过长，未纳入本次建议，请见 SIA002 前缀索引方案。`);
+  }
+  return parts.join(" ");
+}
+
+/**
+ * The English text has to carry the same caveats as the Chinese one: JSON, MCP
+ * and `--lang en` consumers read `messageEn`, so promising "no existing index
+ * serves this access path" on the one branch where an index *does* cover its
+ * leftmost prefix is a wrong statement, not a translation difference.
+ */
+function buildMessageEn(
+  bucket: TableBucket,
+  usable: string[],
+  dropped: string[],
+  prefixHit: { name: string; columns: string[] } | undefined,
+  hasSchema: boolean,
+): string {
+  const parts = [
+    `Candidate index for ${bucket.table} (${usable.join(", ")}), ordered equality -> group/order -> range; ` +
+      `only a contiguous run from the first column can be used.`,
+  ];
+  if (!hasSchema) {
+    parts.push("Pass --schema to confirm that nothing already covers this access path.");
+  } else if (prefixHit) {
+    parts.push(
+      `Existing index ${prefixHit.name}(${prefixHit.columns.join(", ")}) covers only a left prefix of the proposed one; ` +
+        `evaluate dropping it once the new index is live, since keeping both doubles the write cost.`,
+    );
+  } else {
+    parts.push("No existing index serves this access path.");
+  }
+  if (dropped.length > 0) {
+    parts.push(
+      `Column(s) ${dropped.join(", ")} are too long to index whole and were left out; see SIA002 for a prefix-index option.`,
+    );
   }
   return parts.join(" ");
 }
