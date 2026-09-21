@@ -18,8 +18,8 @@ import { mockProvider } from "./llm/mock.js";
 import type { LlmProvider } from "./llm/provider.js";
 import { configFromEnv, createOpenAiCompatProvider } from "./llm/openaiCompat.js";
 import { ALL_RULES, ruleCatalogue } from "./rules/registry.js";
+import { VERSION } from "./version.js";
 
-const VERSION = "0.1.0";
 const SEVERITIES: Severity[] = ["error", "warn", "info"];
 const EXIT_HELP = "\n退出码：0 无阻塞问题 · 1 达到 --fail-on 的发现 · 2 运行错误";
 

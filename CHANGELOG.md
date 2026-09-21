@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`--version` lied.** The version was a literal in `src/cli.ts` and again in
+  `src/mcp/tools.ts`, so after the manifest moved on the CLI still printed the
+  previous release, and so did the MCP `initialize` handshake. Both now read
+  `src/version.ts`, which resolves the package.json beside the built module, and a
+  test asserts the two agree.
 - **Merged statements produced cross-table DDL.** A `.sql` file whose
   statements end at a newline instead of `;` was parsed as one statement: the first
   `FROM` set the table and a later `WHERE` set the columns, so

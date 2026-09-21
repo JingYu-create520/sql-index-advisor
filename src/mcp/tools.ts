@@ -18,7 +18,7 @@ import { mapperStatementsToRecords, parseMapperText } from "../parsers/mapper.js
 import { loadInput } from "../core/input.js";
 import { validateSchema } from "../schema/loader.js";
 
-export const VERSION = "0.1.0";
+export { VERSION } from "../version.js";
 
 export const INSTRUCTIONS = [
   "sql-index-advisor：MySQL / MyBatis 离线索引顾问。",
