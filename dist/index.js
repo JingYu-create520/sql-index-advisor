@@ -482,6 +482,8 @@ function blankQuery(input) {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: [],
     notes: []
@@ -504,6 +506,8 @@ function parseStatement(input, tokens, ctx) {
       selectColumns: parsed.selectColumns,
       selectAliases: parsed.selectAliases,
       selectStar: parsed.selectStar,
+      selectPlain: parsed.selectPlain,
+      selectDistinct: parsed.selectDistinct,
       orderBy: parsed.orderBy,
       groupBy: parsed.groupBy,
       limit: parsed.limit,
@@ -538,6 +542,8 @@ function blank() {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: []
   };
@@ -788,14 +794,20 @@ function parseTableRef(tokens, role) {
   return { name, alias, role };
 }
 function readSelectList(tokens, out, notes) {
-  const list = isWord(tokens[0], "distinct") ? tokens.slice(1) : tokens;
+  out.selectDistinct = isWord(tokens[0], "distinct");
+  const list = out.selectDistinct ? tokens.slice(1) : tokens;
+  let plain = true;
   for (const item of splitOnComma(list)) {
     const asIdx = indexOfWord(item, "as", 0, 0);
     const expr = asIdx === -1 ? stripTrailingAlias(item, out) : item.slice(0, asIdx);
+    if (asIdx !== -1 || expr.length !== item.length) plain = false;
     if (asIdx !== -1 && item[asIdx + 1]?.type === "word") {
       out.selectAliases.push(item[asIdx + 1].value.toLowerCase());
     }
-    if (expr.length === 0) continue;
+    if (expr.length === 0) {
+      plain = false;
+      continue;
+    }
     if (expr.length === 1 && expr[0].value === "*") {
       out.selectStar = true;
       continue;
@@ -806,6 +818,7 @@ function readSelectList(tokens, out, notes) {
       continue;
     }
     if (expr.some((t) => t.value === "(")) {
+      plain = false;
       const isAggregate = expr.some((t) => t.type === "word" && AGGREGATES.has(t.value.toLowerCase()));
       if (!isAggregate) {
         notes.push("SELECT \u542B\u51FD\u6570\u8868\u8FBE\u5F0F\uFF0C\u8986\u76D6\u7D22\u5F15\u5224\u65AD\u6309\u5176\u4F59\u5217\u5904\u7406");
@@ -813,8 +826,12 @@ function readSelectList(tokens, out, notes) {
       continue;
     }
     const ref = columnFromTokens(expr, "select");
-    if (ref) out.selectColumns.push(ref.column);
+    if (ref) {
+      out.selectColumns.push(ref.column);
+      if (ref.wrapped) plain = false;
+    } else plain = false;
   }
+  out.selectPlain = plain && out.selectColumns.length > 0 && !out.selectStar;
 }
 function stripTrailingAlias(tokens, out) {
   if (tokens.length >= 2) {

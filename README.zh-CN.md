@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.14](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.14) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.15](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.15) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -250,6 +250,8 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 **而且它会把同一个索引再推荐一遍。** 按 SIA004 的建议建好函数索引、重新导出 schema、再跑一次：`ALTER TABLE orders ADD INDEX idx_orders_create_time …` 原样回来了，落到迁移文件里就是一条 `ERROR 1061` 重复索引名。表达式正文存在 `EXPRESSION` 这一列，而 5.7 没有这一列，共用的 dump 读不到它，于是只剩名字可对齐：现在这张表上如果已经有与本条建议同名的索引，就不再给 DDL、降级为 `warn`，并且文案里明说"这是按名字对齐，不是证明"，让人用 `SHOW INDEX` 自己确认。
 
+**一条根本跑不起来的深分页改写。** `SELECT id, user_id, amount FROM orders WHERE … LIMIT 100000, 20`（原句没写表别名）拿到的延迟关联是 `… AS page JOIN orders ON `id` = page.`id``，MySQL 回的是 `ERROR 1052 (23000): Column 'id' in on clause is ambiguous`——派生表 `page` 也带 `id` 这一列。而且它把三列投影换成了 `SELECT *`，就算能跑也会把调用方没要的列塞回去。这条是做了测试套件从来没做过的事抓出来的：把工具吐出的改写真机执行一遍。现在改写自带别名 `t`，JOIN、投影、外层排序全部经它限定；并且**只要投影没法原样搬过去就撤回改写**（`rewrite` 字段留空，模板和原因写进 message）：含函数、`AS` 改名、`DISTINCT`，或者排序键限定不了。`SELECT amount + 0` 是把这件事从"改写时小心一点"变成解析层标记的原因——表达式里确实有一个列，把投影当成那个列，返回的值就变了。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
@@ -271,7 +273,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-283 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句；另有一份从真实 8.0.46 导出的 `schema.json`，里面带着函数索引、JSON 多值索引和全文索引——这些正是手写 fixture 想不到的形状。
+290 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句；另有一份从真实 8.0.46 导出的 `schema.json`，里面带着函数索引、JSON 多值索引和全文索引——这些正是手写 fixture 想不到的形状。
 
 ## 许可
 

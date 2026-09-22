@@ -134,15 +134,17 @@ WHERE mobile = 13800000000    -- -> WHERE mobile = '13800000000'
 
 ```sql
 -- ① 延迟关联：先在索引里翻主键，再回表取整行
-SELECT o.* FROM (
+SELECT t.* FROM (
   SELECT `id` FROM `orders` WHERE user_id = 1 ORDER BY id DESC LIMIT 100000, 20
-) AS page JOIN `orders` o ON o.`id` = page.`id` ORDER BY o.id DESC;
+) AS page JOIN `orders` t ON t.`id` = page.`id` ORDER BY t.`id` DESC;
 
 -- ② 游标 / seek：用上一页最后一行的排序键替代偏移量
-WHERE (o.`create_time` < ? OR (o.`create_time` = ? AND o.`id` < ?)) ORDER BY o.create_time DESC LIMIT 20;
+WHERE (t.`create_time` < ? OR (t.`create_time` = ? AND t.`id` < ?)) ORDER BY t.`create_time` DESC LIMIT 20;
 ```
 
-改写语句里的 WHERE / ORDER BY 是从原句**逐字搬过来**的，不是从解析结果重建的——重建会悄悄丢掉解析器无法归类的条件，而"改写后结果集变了"比不改写糟糕得多。遇到含相关子查询的语句，工具降级为只给模板、不给可执行改写。多表 FROM 的深分页同样不做具体改写。
+改写语句里的 WHERE 是从原句**逐字搬过来**的，不是从解析结果重建的——重建会悄悄丢掉解析器无法归类的条件，而"改写后结果集变了"比不改写糟糕得多。遇到含相关子查询的语句，工具降级为只给模板、不给可执行改写。多表 FROM 的深分页同样不做具体改写。
+
+**外层必须自己起别名，而且投影要能逐列搬过去。** 派生表 `page` 只带主键这一列，所以 `ON \`id\` = page.\`id\`` 在 MySQL 里是 `ERROR 1052` 列名有歧义——原查询没写表别名时就会踩到，这条改写当年根本跑不起来。于是改写统一给自己起别名 `t`，JOIN、投影、外层 ORDER BY 全部经它限定。投影只有在"就是一串列名"时才会被重建（`SELECT *` → `t.*`，`SELECT id, user_id` → `t.\`id\`, t.\`user_id\`）；一旦出现函数、`AS` 改名、裸别名 `x y`、`DISTINCT`，或者排序键没法限定，`rewrite` 字段就留空、只把模板和原因写进 message——把 `SELECT *` 当作"反正都能用"的替身，等于把调用方没要的列塞回去。这面旗子是解析层的 `selectPlain` / `selectDistinct`，判错一次就会漏掉像 `SELECT amount + 0` 这种"表达式里确实有个列，但投影不是那个列"的形状。
 
 ## SIA007 · 覆盖索引机会 · S M
 

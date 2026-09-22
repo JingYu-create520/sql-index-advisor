@@ -74,6 +74,16 @@ interface ParsedQuery {
     selectColumns: string[];
     selectStar: boolean;
     /**
+     * True only when the projection is a list of plain column names — no `*`, no
+     * function or arithmetic, no `AS` rename. SIA006 depends on it: a deferred join
+     * has to re-qualify every projected column through the alias it introduces, and
+     * rebuilding `SUM(x) AS gmv` as a column list would silently change the columns
+     * and labels the caller's row mapper reads.
+     */
+    selectPlain: boolean;
+    /** `SELECT DISTINCT`, which a deferred join cannot reproduce (its dedup happens after the join). */
+    selectDistinct: boolean;
+    /**
      * Aliases defined by the SELECT list (`SUM(amount) AS gmv`). ORDER BY may sort
      * by these, and they are not real columns, so indexing one would be nonsense.
      */

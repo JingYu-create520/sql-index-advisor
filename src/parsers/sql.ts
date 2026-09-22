@@ -204,6 +204,8 @@ function blankQuery(input: string): ParsedQuery {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: [],
     notes: [],
@@ -229,6 +231,8 @@ function parseStatement(input: string, tokens: Token[], ctx: ParseCtx): ParsedQu
       selectColumns: parsed.selectColumns,
       selectAliases: parsed.selectAliases,
       selectStar: parsed.selectStar,
+      selectPlain: parsed.selectPlain,
+      selectDistinct: parsed.selectDistinct,
       orderBy: parsed.orderBy,
       groupBy: parsed.groupBy,
       limit: parsed.limit,
@@ -262,6 +266,8 @@ interface Partial {
   selectColumns: string[];
   selectAliases: string[];
   selectStar: boolean;
+  selectPlain: boolean;
+  selectDistinct: boolean;
   orderBy: ColumnRef[];
   groupBy: ColumnRef[];
   limit?: LimitClause;
@@ -291,6 +297,8 @@ function blank(): Partial {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: [],
   };
@@ -609,14 +617,25 @@ function parseTableRef(tokens: Token[], role: string): TableRef | undefined {
 // --- SELECT list -------------------------------------------------------------
 
 function readSelectList(tokens: Token[], out: Partial, notes: string[]): void {
-  const list = isWord(tokens[0], "distinct") ? tokens.slice(1) : tokens;
+  out.selectDistinct = isWord(tokens[0], "distinct");
+  const list = out.selectDistinct ? tokens.slice(1) : tokens;
+  // Is the projection a plain list of columns? Only then can another rule rewrite
+  // the statement and re-qualify each item through a new alias without changing
+  // what the caller receives.
+  let plain = true;
   for (const item of splitOnComma(list)) {
     const asIdx = indexOfWord(item, "as", 0, 0);
     const expr = asIdx === -1 ? stripTrailingAlias(item, out) : item.slice(0, asIdx);
+    // A renamed output (`x AS y`, `x y`) is part of the contract with the caller's
+    // row mapper, so a rule that rebuilds the list cannot reproduce it.
+    if (asIdx !== -1 || expr.length !== item.length) plain = false;
     if (asIdx !== -1 && item[asIdx + 1]?.type === "word") {
       out.selectAliases.push(item[asIdx + 1]!.value.toLowerCase());
     }
-    if (expr.length === 0) continue;
+    if (expr.length === 0) {
+      plain = false;
+      continue;
+    }
 
     if (expr.length === 1 && expr[0]!.value === "*") {
       out.selectStar = true;
@@ -628,6 +647,7 @@ function readSelectList(tokens: Token[], out: Partial, notes: string[]): void {
       continue;
     }
     if (expr.some((t) => t.value === "(")) {
+      plain = false;
       // Aggregate projections are normal, not a parsing limitation.
       const isAggregate = expr.some((t) => t.type === "word" && AGGREGATES.has(t.value.toLowerCase()));
       if (!isAggregate) {
@@ -636,8 +656,18 @@ function readSelectList(tokens: Token[], out: Partial, notes: string[]): void {
       continue;
     }
     const ref = columnFromTokens(expr, "select");
-    if (ref) out.selectColumns.push(ref.column);
+    if (ref) {
+      out.selectColumns.push(ref.column);
+      // `amount + 0` yields a column ref with the column inside it, and this list
+      // is also what a rewrite rebuilds its projection from. An expression here
+      // would come back as the bare column, so the value the caller reads changes.
+      if (ref.wrapped) plain = false;
+    } else plain = false;
   }
+  // Star is handled by its own flag, so "plain" here means exactly: a list of
+  // column names, in the written order, nothing computed. A mixed `SELECT *, x`
+  // is not a list we could rebuild item by item either.
+  out.selectPlain = plain && out.selectColumns.length > 0 && !out.selectStar;
 }
 
 /** `SELECT a b` means `a AS b`; drop the trailing bare alias, but remember it. */

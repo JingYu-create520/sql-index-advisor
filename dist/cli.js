@@ -3573,6 +3573,8 @@ function blankQuery(input) {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: [],
     notes: []
@@ -3595,6 +3597,8 @@ function parseStatement(input, tokens, ctx) {
       selectColumns: parsed.selectColumns,
       selectAliases: parsed.selectAliases,
       selectStar: parsed.selectStar,
+      selectPlain: parsed.selectPlain,
+      selectDistinct: parsed.selectDistinct,
       orderBy: parsed.orderBy,
       groupBy: parsed.groupBy,
       limit: parsed.limit,
@@ -3627,6 +3631,8 @@ function blank() {
     selectColumns: [],
     selectAliases: [],
     selectStar: false,
+    selectPlain: false,
+    selectDistinct: false,
     orderBy: [],
     groupBy: []
   };
@@ -3867,14 +3873,20 @@ function parseTableRef(tokens, role) {
   return { name, alias, role };
 }
 function readSelectList(tokens, out, notes) {
-  const list = isWord(tokens[0], "distinct") ? tokens.slice(1) : tokens;
+  out.selectDistinct = isWord(tokens[0], "distinct");
+  const list = out.selectDistinct ? tokens.slice(1) : tokens;
+  let plain = true;
   for (const item of splitOnComma(list)) {
     const asIdx = indexOfWord(item, "as", 0, 0);
     const expr = asIdx === -1 ? stripTrailingAlias(item, out) : item.slice(0, asIdx);
+    if (asIdx !== -1 || expr.length !== item.length) plain = false;
     if (asIdx !== -1 && item[asIdx + 1]?.type === "word") {
       out.selectAliases.push(item[asIdx + 1].value.toLowerCase());
     }
-    if (expr.length === 0) continue;
+    if (expr.length === 0) {
+      plain = false;
+      continue;
+    }
     if (expr.length === 1 && expr[0].value === "*") {
       out.selectStar = true;
       continue;
@@ -3885,6 +3897,7 @@ function readSelectList(tokens, out, notes) {
       continue;
     }
     if (expr.some((t) => t.value === "(")) {
+      plain = false;
       const isAggregate = expr.some((t) => t.type === "word" && AGGREGATES.has(t.value.toLowerCase()));
       if (!isAggregate) {
         notes.push("SELECT \u542B\u51FD\u6570\u8868\u8FBE\u5F0F\uFF0C\u8986\u76D6\u7D22\u5F15\u5224\u65AD\u6309\u5176\u4F59\u5217\u5904\u7406");
@@ -3892,8 +3905,12 @@ function readSelectList(tokens, out, notes) {
       continue;
     }
     const ref = columnFromTokens(expr, "select");
-    if (ref) out.selectColumns.push(ref.column);
+    if (ref) {
+      out.selectColumns.push(ref.column);
+      if (ref.wrapped) plain = false;
+    } else plain = false;
   }
+  out.selectPlain = plain && out.selectColumns.length > 0 && !out.selectStar;
 }
 function stripTrailingAlias(tokens, out) {
   if (tokens.length >= 2) {
@@ -9948,22 +9965,29 @@ var init_sia006 = __esm({
         if (record2.parsed.kind !== "select") return [];
         if (record2.parsed.tables.length !== 1) return [];
         const table = record2.parsed.tables[0];
-        const alias = table.alias ?? "";
-        const aliasInUse = alias.length > 0;
+        const sourceAlias = table.alias ?? "";
+        const outer = "t";
         const schemaTable = findTable(schema, table.name);
         const pk = schemaTable?.indexes.find((i) => i.primary)?.columns[0] ?? "id";
         const rawWhere = record2.parsed.whereText ?? "";
         const rawOrder = record2.parsed.orderByText ?? "";
-        const order = rawOrder ? ` ORDER BY ${rawOrder}` : "";
-        const projection = aliasInUse ? `${alias}.*` : "*";
-        const qualified = (column) => aliasInUse ? `${alias}.${quoteIdent(column)}` : quoteIdent(column);
-        const innerWhere = rawWhere ? ` WHERE ${unqualify(rawWhere, alias)}` : "";
-        const innerOrder = rawOrder ? ` ORDER BY ${unqualify(rawOrder, alias)}` : "";
-        const deferredJoin = `SELECT ${projection} FROM (SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)}${innerWhere}${innerOrder} LIMIT ${limit.offset}, ${limit.rowCount ?? 20}) AS page JOIN ${quoteIdent(table.name)}${aliasInUse ? ` ${alias}` : ""} ON ${aliasInUse ? `${alias}.` : ""}${quoteIdent(pk)} = page.${quoteIdent(pk)}${order};`;
-        const correlated = /\(\s*select\b/i.test(rawWhere) && aliasInUse;
+        const innerWhere = rawWhere ? ` WHERE ${unqualify(rawWhere, sourceAlias)}` : "";
+        const innerOrder = rawOrder ? ` ORDER BY ${unqualify(rawOrder, sourceAlias)}` : "";
+        const isOutputAlias = (column) => record2.parsed.selectAliases.includes(column) && !record2.parsed.selectColumns.includes(column);
+        const projection = record2.parsed.selectStar ? `${outer}.*` : record2.parsed.selectPlain ? record2.parsed.selectColumns.map((c) => `${outer}.${quoteIdent(c)}`).join(", ") : void 0;
+        const sortable = rawOrder === "" || record2.parsed.orderBy.length > 0 && record2.parsed.orderBy.every(
+          (c) => !c.wrapped && !isOutputAlias(c.column) && // The only qualifier that can appear is this statement's own table or
+          // its alias - the FROM has exactly one table - and both map onto `t`.
+          (!c.table || c.table === sourceAlias.toLowerCase() || c.table === table.name.toLowerCase())
+        );
+        const outerOrder = rawOrder === "" ? "" : sortable ? ` ORDER BY ${record2.parsed.orderBy.map((c) => `${outer}.${quoteIdent(c.column)}${c.desc ? " DESC" : ""}`).join(", ")}` : "";
+        const faithful = projection !== void 0 && sortable && !record2.parsed.selectDistinct;
+        const deferredJoin = `SELECT ${projection ?? `${outer}.* /* \u628A\u539F\u67E5\u8BE2\u7684\u6295\u5F71\u9010\u5217\u642C\u8FC7\u6765 */`} FROM (SELECT ${quoteIdent(pk)} FROM ${quoteIdent(table.name)}${innerWhere}${innerOrder} LIMIT ${limit.offset}, ${limit.rowCount ?? 20}) AS page JOIN ${quoteIdent(table.name)} ${outer} ON ${outer}.${quoteIdent(pk)} = page.${quoteIdent(pk)}${outerOrder};`;
+        const correlated = /\(\s*select\b/i.test(rawWhere) && sourceAlias.length > 0;
+        const templateOnly = correlated || !faithful;
         const ordering = record2.parsed.orderBy[0];
         const cmp = ordering?.desc ? "<" : ">";
-        const seek = ordering ? `SELECT ${projection} FROM ${quoteIdent(table.name)}${aliasInUse ? ` ${alias}` : ""} WHERE (${qualified(ordering.column)} ${cmp} ? OR (${qualified(ordering.column)} = ? AND ${qualified(pk)} ${cmp} ?))${order} LIMIT ${limit.rowCount ?? 20};` : void 0;
+        const seek = ordering && !isOutputAlias(ordering.column) && faithful ? `SELECT ${projection} FROM ${quoteIdent(table.name)} ${outer} WHERE (${outer}.${quoteIdent(ordering.column)} ${cmp} ? OR (${outer}.${quoteIdent(ordering.column)} = ? AND ${outer}.${quoteIdent(pk)} ${cmp} ?))${outerOrder} LIMIT ${limit.rowCount ?? 20};` : void 0;
         const finding = {
           rule: RULE_ID6,
           severity: correlated ? "info" : "warn",
@@ -9977,15 +10001,20 @@ var init_sia006 = __esm({
           needsMetrics: false,
           table: table.name,
           suggestedDDL: [],
-          rewrite: correlated ? void 0 : deferredJoin,
+          rewrite: templateOnly ? void 0 : deferredJoin,
           message: [
             `LIMIT ${limit.offset}, ${limit.rowCount ?? "?"}\uFF1AMySQL \u4ECD\u8981\u626B\u63CF\u5E76\u4E22\u5F03\u524D ${limit.offset} \u884C\uFF0C\u9875\u7801\u8D8A\u6DF1\u4EE3\u4EF7\u8D8A\u9AD8\uFF0CPages_read \u5168\u90E8\u767D\u4ED8\u3002`,
-            correlated ? `\u8BE5\u8BED\u53E5\u7684 WHERE \u542B\u5B50\u67E5\u8BE2\uFF0C\u9759\u6001\u6539\u5199\u5EF6\u8FDF\u5173\u8054\u5BB9\u6613\u51FA\u9519\uFF0C\u8FD9\u91CC\u53EA\u7ED9\u6A21\u677F\uFF0C\u8BF7\u4EBA\u5DE5\u6838\u5BF9\u5B50\u67E5\u8BE2\u5728\u6D3E\u751F\u8868\u4E2D\u7684\u53EF\u89C1\u6027\uFF1A${deferredJoin}` : `\u65B9\u6848\u4E00\uFF08\u5EF6\u8FDF\u5173\u8054\uFF0C\u6539\u52A8\u6700\u5C0F\uFF09\uFF1A\u5148\u5728\u7D22\u5F15\u91CC\u7FFB\u4E3B\u952E\uFF0C\u518D\u56DE\u8868\u53D6\u6574\u884C\uFF1A${deferredJoin}`,
-            ...seek ? [`\u65B9\u6848\u4E8C\uFF08\u6E38\u6807/seek \u5206\u9875\uFF0C\u9002\u5408\u65E0\u9650\u4E0B\u62C9\uFF09\uFF1A\u7528\u4E0A\u4E00\u9875\u6700\u540E\u4E00\u884C\u7684\u6392\u5E8F\u952E\u66FF\u4EE3\u504F\u79FB\u91CF\uFF1A${seek}`] : [`\u65B9\u6848\u4E8C\uFF08\u6E38\u6807\u5206\u9875\uFF09\uFF1A\u5F53\u524D\u67E5\u8BE2\u6CA1\u6709 ORDER BY\uFF0C\u65E0\u6CD5\u751F\u6210 seek \u6761\u4EF6\uFF1B\u6DF1\u5206\u9875\u5FC5\u987B\u5148\u6709\u7A33\u5B9A\u6392\u5E8F\u952E\u3002`],
+            correlated ? `\u8BE5\u8BED\u53E5\u7684 WHERE \u542B\u5B50\u67E5\u8BE2\uFF0C\u9759\u6001\u6539\u5199\u5EF6\u8FDF\u5173\u8054\u5BB9\u6613\u51FA\u9519\uFF0C\u8FD9\u91CC\u53EA\u7ED9\u6A21\u677F\uFF0C\u8BF7\u4EBA\u5DE5\u6838\u5BF9\u5B50\u67E5\u8BE2\u5728\u6D3E\u751F\u8868\u4E2D\u7684\u53EF\u89C1\u6027\uFF1A${deferredJoin}` : !faithful ? `\u5EF6\u8FDF\u5173\u8054\u7684\u5199\u6CD5\u662F\u6210\u719F\u7684\uFF08\u6A21\u677F\u89C1\u4E0B\uFF09\uFF0C\u4F46\u8FD9\u6761\u67E5\u8BE2\u7684\u6295\u5F71\u6216\u6392\u5E8F\u672C\u5DE5\u5177\u65E0\u6CD5\u9010\u5217\u642C\u8FDB\u6539\u5199\u91CC\uFF08\u542B\u51FD\u6570\u3001\u6539\u540D AS\u3001DISTINCT \u6216\u5E26\u8868\u540D\u9650\u5B9A\u7684\u6392\u5E8F\u952E\uFF09\uFF0C\u7ED9\u51FA\u4E00\u4EFD\u4F1A\u6539\u53D8\u7ED3\u679C\u96C6\u7684 SQL \u6BD4\u4E0D\u7ED9\u66F4\u7CDF\uFF0C\u6240\u4EE5 rewrite \u5B57\u6BB5\u7559\u7A7A\uFF1A${deferredJoin}` : `\u65B9\u6848\u4E00\uFF08\u5EF6\u8FDF\u5173\u8054\uFF0C\u6539\u52A8\u6700\u5C0F\uFF09\uFF1A\u5148\u5728\u7D22\u5F15\u91CC\u7FFB\u4E3B\u952E\uFF0C\u518D\u56DE\u8868\u53D6\u6574\u884C\uFF1A${deferredJoin}`,
+            ...seek ? [`\u65B9\u6848\u4E8C\uFF08\u6E38\u6807/seek \u5206\u9875\uFF0C\u9002\u5408\u65E0\u9650\u4E0B\u62C9\uFF09\uFF1A\u7528\u4E0A\u4E00\u9875\u6700\u540E\u4E00\u884C\u7684\u6392\u5E8F\u952E\u66FF\u4EE3\u504F\u79FB\u91CF\uFF1A${seek}`] : !ordering ? [`\u65B9\u6848\u4E8C\uFF08\u6E38\u6807\u5206\u9875\uFF09\uFF1A\u5F53\u524D\u67E5\u8BE2\u6CA1\u6709 ORDER BY\uFF0C\u65E0\u6CD5\u751F\u6210 seek \u6761\u4EF6\uFF1B\u6DF1\u5206\u9875\u5FC5\u987B\u5148\u6709\u7A33\u5B9A\u6392\u5E8F\u952E\u3002`] : [`\u65B9\u6848\u4E8C\uFF08\u6E38\u6807\u5206\u9875\uFF09\uFF1A\u9700\u8981\u5148\u628A\u6392\u5E8F\u952E\u6362\u6210\u4E0A\u4E00\u9875\u7684\u503C\uFF0C\u672C\u5DE5\u5177\u6CA1\u6709\u751F\u6210\u6A21\u677F\uFF0C\u56E0\u4E3A\u8FD9\u6761\u67E5\u8BE2\u7684\u6295\u5F71\u65E0\u6CD5\u9010\u5217\u642C\u8FC7\u6765\u3002`],
             ...schemaTable ? [] : [`\u672A\u63D0\u4F9B --schema\uFF0C\u6539\u5199\u8BED\u53E5\u6309\u4E3B\u952E\u5217\u540D id \u751F\u6210\uFF0C\u6267\u884C\u524D\u8BF7\u786E\u8BA4\u4E3B\u952E\u786E\u5B9E\u662F id\u3002`],
             `\u6CE8\u610F\uFF1A\u6D3E\u751F\u8868\u53EA\u51B3\u5B9A\u53D6\u54EA\u51E0\u884C\uFF0C\u6700\u7EC8\u987A\u5E8F\u4ECD\u7531\u5916\u5C42 ORDER BY \u51B3\u5B9A\uFF0C\u5916\u5C42\u6392\u5E8F\u4E0D\u80FD\u7701\u3002`
           ].join(" "),
-          messageEn: `OFFSET ${limit.offset} scans and discards rows before returning ${limit.rowCount ?? "?"}; use a deferred join or keyset pagination.`
+          messageEn: [
+            `OFFSET ${limit.offset} scans and discards rows before returning ${limit.rowCount ?? "?"}; use a deferred join or keyset pagination.`,
+            correlated ? `The WHERE clause contains a subquery, and moving it into a derived table is easy to get wrong statically, so this is a template only: check how the subquery sees the derived table.` : !faithful ? `The deferred-join shape below is the standard fix, but the rewrite is left empty because this query's projection or sort cannot be carried over column by column (a function, an \`AS\` rename, DISTINCT, or a qualified sort key): handing back SQL that changes the result set is worse than handing back none.` : `Option one (deferred join, smallest change): page through the primary key in the index, then fetch the rows.`,
+            ...ordering && !seek ? [`Option two (keyset pagination) is not generated here: the columns cannot be carried over.`] : seek ? [`Option two (keyset pagination) replaces the offset with the last sort key of the previous page.`] : [`Option two (keyset pagination) needs a stable sort key, and this query has no ORDER BY.`],
+            schemaTable ? "" : `No --schema was passed, so the rewrite assumes the primary key is named id; confirm before running it.`
+          ].filter(Boolean).join(" ")
         };
         return [finding];
       }

@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.15 — 2026-09-22
+
+### Fixed
+
+- **SIA006's deferred-join rewrite did not run.** For a deep page on a table the
+  query did not alias — `SELECT id, user_id, amount FROM orders WHERE … LIMIT 100000, 20` —
+  the emitted SQL was
+  `SELECT * FROM (SELECT `id` FROM `orders` … ) AS page JOIN orders ON `id` = page.`id``,
+  and MySQL answered `ERROR 1052 (23000): Column 'id' in on clause is ambiguous`:
+  the derived table exposes `id` too. The same statement also turned a three-column
+  projection into `SELECT *`, so even if it had run it would have handed the caller
+  columns nothing asked for. Found by executing the tool's own output against a live
+  8.0.46, which is now the standard way this project audits a rewrite.
+  The rewrite always introduces its own alias (`t`) and qualifies the join, the
+  projection and the outer sort through it.
+- **A rewrite that cannot be faithful is withdrawn instead of approximated.** The
+  projection is rebuilt column by column only when it *is* a column list: `SELECT *`
+  becomes `t.*`; a computed value, an `AS` rename, a bare `x y` rename, `DISTINCT`
+  or a sort key that cannot be re-qualified all produce no `rewrite` field, with the
+  template and the reason in the message (both languages). `SELECT amount + 0` was
+  the case that made this a parse-level flag rather than a guess: the column inside
+  the expression was being collected as if the projection were that column, which
+  would have quietly changed a returned value.
+
+### Added
+
+- `ParsedQuery.selectPlain` / `selectDistinct`, so a rule can tell "a list of columns
+  I can carry over" from "a projection I must not rebuild".
+
+### Verified
+
+`CREATE TEMPORARY TABLE … AS <rewrite>` against the live 8.0.46 demo database: the
+rewrite runs, returns the same 20 rows and the same three columns as the original,
+and the outer `ORDER BY` is preserved. Re-running the whole pipeline after applying
+the generated migration produced no repeated DDL. 290 tests pass.
+
 ## 0.1.14 — 2026-09-22
 
 Found by doing the one thing the tool tells you to do: create the functional index

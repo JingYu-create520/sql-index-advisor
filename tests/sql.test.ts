@@ -100,6 +100,33 @@ describe("parseSql: projection, ordering, paging", () => {
     expect(parseSql("SELECT o.id FROM orders o").selectColumns).toEqual(["id"]);
   });
 
+  it("tells a plain column list from a projection that cannot be rebuilt", () => {
+    // SIA006's deferred join has to re-qualify every projected column through its
+    // own alias, so it may only do that when the list is genuinely a list of
+    // columns. `selectPlain` is where that judgement is recorded.
+    const plain = parseSql("SELECT id, user_id, amount FROM orders");
+    expect([plain.selectPlain, plain.selectStar, plain.selectColumns]).toEqual([
+      true,
+      false,
+      ["id", "user_id", "amount"],
+    ]);
+    expect(parseSql("SELECT o.id, o.amount FROM orders o").selectPlain).toBe(true);
+    expect(parseSql("SELECT * FROM t").selectPlain).toBe(false);
+    // A mixed star is not a list either: rebuilding it item by item would drop
+    // every column the caller did not name.
+    expect(parseSql("SELECT *, x FROM t").selectStar).toBe(true);
+    expect(parseSql("SELECT *, x FROM t").selectPlain).toBe(false);
+    expect(parseSql("SELECT SUM(amount) FROM t").selectPlain).toBe(false);
+    expect(parseSql("SELECT amount + 0 FROM t").selectPlain).toBe(false);
+    expect(parseSql("SELECT user_id AS uid FROM t").selectPlain).toBe(false);
+    // `user_id uid` is the same rename without the keyword.
+    expect(parseSql("SELECT user_id uid FROM t").selectPlain).toBe(false);
+    const distinct = parseSql("SELECT DISTINCT user_id FROM t");
+    expect([distinct.selectPlain, distinct.selectDistinct]).toEqual([true, true]);
+    // A statement with no projection we could name is not "plain".
+    expect(parseSql("SELECT 1").selectPlain).toBe(false);
+  });
+
   it("keeps ORDER BY direction", () => {
     const parsed = parseSql("SELECT id FROM t ORDER BY create_time DESC, id ASC");
     expect(parsed.orderBy.map((o) => [o.column, o.desc])).toEqual([

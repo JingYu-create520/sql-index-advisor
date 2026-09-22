@@ -55,6 +55,8 @@ exports[`parseSql: snapshot > locks the shape of a representative order-listing 
   "orderByText": "o.create_time DESC",
   "selectAliases": [],
   "selectColumns": [],
+  "selectDistinct": false,
+  "selectPlain": false,
   "selectStar": true,
   "sql": "SELECT o.* FROM orders o WHERE o.user_id = 42 AND o.status = 'PAID' AND o.amount > 100 ORDER BY o.create_time DESC LIMIT 20",
   "tables": [
