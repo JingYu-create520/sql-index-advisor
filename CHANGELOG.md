@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.8 — 2026-09-22
+
+### Fixed
+
+- **The committed bundle was not self-contained, so the Action still could not run
+  it.** tsup externalises dependencies by default, which is correct for the library
+  entry and wrong for a binary: `dist/cli.js` still reached for `zod` and
+  `commander` in `node_modules`, and a runner holding only the checkout answered
+  with `ERR_MODULE_NOT_FOUND`. Both binaries now vendor their runtime dependencies,
+  and since those are CommonJS they get a `createRequire(import.meta.url)` shim in
+  the banner; without it Node refuses to start the file at all
+  (`Dynamic require of "events" is not supported`).
+- Verified the way the runner does it: copy `dist/` and `package.json` into a
+  directory with no `node_modules` anywhere, then run the CLI and the MCP
+  handshake from there. The MCP server's ready banner was also confirmed to go to
+  stderr, so the stdio channel stays clean protocol.
+
 ## 0.1.7 — 2026-09-22
 
 ### Fixed
