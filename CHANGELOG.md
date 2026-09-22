@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.5 — 2026-09-22
+
+### Fixed
+
+- **A join condition was treated as a filter on the driving table.** For
+  `FROM demo_order o JOIN demo_order_detail d ON d.order_id = o.id WHERE o.shop_id = ?
+  AND o.delete_status = 0 ORDER BY o.create_time`, the `o.id` that the join hands to
+  the inner table was counted three times over: it took a slot in the proposed
+  composite (`(shop_id, delete_status, id, create_time)`, and InnoDB appends the
+  primary key to every secondary index anyway), it made a table joined on its
+  primary key look like a unique lookup that needs no index, and it made the real
+  `WHERE` columns look already indexed. All three checks now read the `WHERE`
+  clause only, and the suggestion becomes `(shop_id, delete_status, create_time)`
+  with the sort column back in the position that matters.
+
+### Added
+
+- `examples/pr-demo/`: a deliberately imperfect mapper plus the tiny
+  `schema.json` it is judged against, used by `.github/workflows/index-review.yml`
+  so this repository reviews its own pull requests with its own Action. That
+  workflow is the end-to-end proof that `uses: …@v0` resolves and that a
+  contributor gets advice on the line they touched without installing anything.
+
 ## 0.1.4 — 2026-09-22
 
 ### Fixed

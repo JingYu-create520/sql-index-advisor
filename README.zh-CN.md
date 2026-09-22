@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.4](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.4) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.5](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.5) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -221,7 +221,7 @@ SELECT COUNT(DISTINCT enabled) / COUNT(*) FROM stock;
 
 **同一条查询被算成两条。** 带符号字面量当年没被归一化，`-1` 和 `1` 会把一个查询模式裂成两个指纹，于是它的 `Rows_examined` 被对半砍、排名也往后掉，等于工具把自己最该报的那条藏了起来。现在"跨字面量、跨正负号、跨 `IN (...)` 长度的指纹稳定性"是被断言的性质。
 
-**两种语言互相矛盾。** 中文文案会写"已有索引只覆盖前缀，新索引可用后评估是否下线旧索引"，而英文字段在同一分支下却直接断言 "no existing index serves this access path"。少翻译了一个分支，而读 `messageEn` 的 JSON、MCP 使用者拿到的是假的安全结论。现在英文与中文走同样三个分支，并有测试钉住"前缀警告必须同时出现在两边"：
+**把 JOIN 的键当成驱动表上的过滤条件。** `o JOIN d ON d.order_id = o.id` 里的 `o.id` 是交给内表的那个值，不是缩小 `o` 范围的条件。过去它被当成过滤条件，于是连着出三个问题：它占了复合索引的一个位置（InnoDB 本来就把主键附加在每个二级索引后面，这个位置等于白占，还把真正该排进去的排序列挤了出去）；让一张按主键做 JOIN 的表被误判成“唯一定位不需要索引”；又让真正的 `WHERE` 条件被当成已经被索引覆盖。现在这三处都只看 `WHERE`，建议也从`(shop_id, delete_status, id, create_time)` 变成 `(shop_id, delete_status, create_time)`。**两种语言互相矛盾。** 中文文案会写"已有索引只覆盖前缀，新索引可用后评估是否下线旧索引"，而英文字段在同一分支下却直接断言 "no existing index serves this access path"。少翻译了一个分支，而读 `messageEn` 的 JSON、MCP 使用者拿到的是假的安全结论。现在英文与中文走同样三个分支，并有测试钉住"前缀警告必须同时出现在两边"：
 
 ```
 warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality -> group/order -> range;
@@ -256,7 +256,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-228 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+230 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

@@ -1,6 +1,6 @@
 {
   "name": "sql-index-advisor",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Offline index advisor for MySQL / MyBatis: slow query log in, index recommendations + migration SQL out.",
   "keywords": [
     "mysql",

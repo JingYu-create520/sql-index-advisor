@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.4](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.4) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.5](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.5) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
@@ -228,7 +228,7 @@ A flag inside a composite is not penalised. `(sku_id, synced)` is a fine index, 
 
 **The same query counted twice.** Signed literals were not masked during normalization, so `-1` and `1` split one query pattern into two fingerprints. That halved its recorded `Rows_examined` and pushed it down the ranking, meaning the tool hid its own worst offender. Fingerprint stability across literal values, signs and `IN (...)` lengths is now an asserted property.
 
-**The two languages disagreed.** The Chinese message warns that an existing index covers only a left prefix of the proposed one and should be evaluated for removal; the English field for that same finding said, flatly, "no existing index serves this access path." One branch of the code never got the caveat translated, so JSON and MCP consumers, which read `messageEn`, received a false all-clear. The English text now mirrors the same three branches as the Chinese one, and a test asserts the prefix caveat shows up in both:
+**A join key was indexed on the wrong side.** For `o JOIN d ON d.order_id = o.id`, the column `o.id` is a value handed to the inner table, not a condition narrowing `o`. It was counted as one anyway, and three things followed: it took a slot in the proposed composite (InnoDB appends the primary key to every secondary index, so that slot was already paid for while the real sort column got pushed out of it), it made a table joined on its primary key look like a unique lookup needing nothing, and it made the actual `WHERE` columns look already indexed. All three checks read only `WHERE` now, and `(shop_id, delete_status, id, create_time)` became `(shop_id, delete_status, create_time)`. **The two languages disagreed.** The Chinese message warns that an existing index covers only a left prefix of the proposed one and should be evaluated for removal; the English field for that same finding said, flatly, "no existing index serves this access path." One branch of the code never got the caveat translated, so JSON and MCP consumers, which read `messageEn`, received a false all-clear. The English text now mirrors the same three branches as the Chinese one, and a test asserts the prefix caveat shows up in both:
 
 ```
 warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality -> group/order -> range;
@@ -263,7 +263,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-228 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+230 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 
