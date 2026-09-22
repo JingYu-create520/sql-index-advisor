@@ -38,4 +38,12 @@
         LIMIT 120000, 20
     </select>
 
+    <!-- Bound as a number against a VARCHAR column: the comparison converts the
+         column, not the literal, so the index on the column is abandoned. -->
+    <select id="byOrderSn" resultType="com.example.demo.model.OrderView">
+        SELECT id, order_sn, status
+        FROM demo_order
+        WHERE order_sn = 12345678901234
+    </select>
+
 </mapper>

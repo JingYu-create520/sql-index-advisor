@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.7 — 2026-09-22
+
+### Fixed
+
+- **The GitHub Action could report green while doing nothing.** It installed the
+  package globally with `npm i -g github:…` and then called `sia`; on a runner that
+  install extracted nothing onto PATH, so the next step died with
+  `sia: command not found` (exit 127), and because that step carried
+  `continue-on-error: true` the check still passed. The Action now runs the bundle
+  it ships (`node "$GITHUB_ACTION_PATH/dist/cli.js"`), which removes the install,
+  the PATH dependency and the npm extraction failure in one move.
+  `continue-on-error` is gone: an exit above 1 fails the step loudly, while
+  findings at or above `--fail-on` remain the only thing that can redden a build.
+  It also exposes a `cli` output, so a later step in the caller's job reuses the
+  same binary instead of assuming a global `sia` exists.
+
+Caught by opening a real pull request against this repository, which is the only
+way that class of bug shows up.
+
 ## 0.1.6 — 2026-09-22
 
 Six findings from two sources: running the tool over other people's projects
