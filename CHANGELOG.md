@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.13 — 2026-09-22
+
+Closes the one miss the previous release documented instead of fixing: a table that
+only appears inside parentheses was never examined.
+
+### Added
+
+- **A `SELECT` inside parentheses is analysed as a statement of its own**, at any
+  nesting depth: the list of an `IN (SELECT ...)`, the body of an
+  `EXISTS (SELECT ...)`, the derived table behind `FROM (SELECT ...) d`, and a
+  bracketed `UNION` branch. Each one runs against its own tables and needs its own
+  indexes, so the outer statement's parse could not stand in for it. They enter the
+  run as sibling records (`src/core/subqueries.ts`), inheriting the parent's
+  occurrences and cost, and identical bodies fold into one record by fingerprint.
+  Measured over four open-source MyBatis projects — 378 mapper XML files, 1,666
+  statement records — which hold 17 such bodies between them, and every one of them
+  produced advice: `paicoding`'s `EXISTS (SELECT 1 FROM column_article ca WHERE
+  ca.article_id = a.id AND ca.column_id = ?)`, `zheng`'s `upms_user_role`, whose DDL
+  has no secondary index at all, and `mall`'s two bracketed `UNION` branches. Cost
+  on the 908-record `mall` run: +40 ms.
+- **A skip now says how much of the run it covers.** `skipped` was a per-rule
+  summary, so a `WITH` statement — outer query with no resolvable table, inner body
+  with a real access path — printed "not evaluated: SIA001" underneath the
+  suggestion SIA001 had just produced. The footer, the CI annotation and the
+  migration header now read `no table could be identified, on 1 of 2 statements`,
+  and stay unqualified when the skip really is the whole run.
+
+### Fixed
+
+- **Inside a subquery, a bare column on the right of `=` is no longer an index
+  candidate.** MySQL resolves such a name inner-first, so `WHERE child_id =
+  parent_id` may be testing the *outer* query's column, and an unqualified name
+  that `order_item` does not have would have been written into `ALTER TABLE
+  order_item`. Qualified names needed no new rule — an unknown qualifier was
+  already dropped. Pinned both ways in `tests/subquery.test.ts`.
+- **The `WITH` caveat reached an English report half in Chinese**
+  (`不支持的语句类型, skipped（支持 …）`). The reason map now covers that note and
+  the two new ones, and a test asserts the caveats added for known gaps contain no
+  untranslated Chinese when `--lang en` is asked for.
+
+### What this still does not do
+
+A filter on a derived table's alias (`WHERE d.total > 10`) names no physical table
+and is reported rather than guessed at; an unbracketed `UNION` branch is still not
+analysed, because a trailing `ORDER BY` / `LIMIT` belongs to the union result
+rather than to the last query; and no cost model is applied to the correlation
+itself (a correlated body is weighted as one execution per parent execution, which
+understates a per-row probe and overstates a one-shot `IN` list).
+
 ## 0.1.12 — 2026-09-22
 
 Found by auditing three more projects with different styles (`zheng`, `novel-plus`,

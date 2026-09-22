@@ -432,8 +432,48 @@ function splitStatements(text) {
   return out;
 }
 function parseSql(input) {
-  const notes = [];
-  const empty = {
+  return parseSqlAll(input)[0];
+}
+function parseSqlAll(input) {
+  let tokens;
+  try {
+    tokens = tokenize(stripComments(input));
+  } catch (err) {
+    return [bailOut(input, err)];
+  }
+  if (tokens.length === 0) return [{ ...blankQuery(input), notes: ["\u7A7A\u8BED\u53E5\uFF0C\u5DF2\u8DF3\u8FC7"] }];
+  const merged = countMergedStatements(tokens);
+  if (merged > 0) {
+    return [
+      {
+        ...blankQuery(input),
+        notes: [
+          `\u8FD9\u6761\u8F93\u5165\u91CC\u6DF7\u4E86 ${merged + 1} \u4E2A\u8BED\u53E5\u4F46\u6CA1\u6709\u4EFB\u4F55\u5206\u53F7\u5206\u9694\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A\u628A\u5B83\u4EEC\u5F53\u6210\u4E00\u6761\u89E3\u6790\u4F1A\u7ED9\u51FA\u8DE8\u8868\u7684\u7D22\u5F15\u5EFA\u8BAE\u3002\u6BCF\u6761\u8BED\u53E5\u8BF7\u4EE5 ; \u7ED3\u5C3E\u3002`
+        ]
+      }
+    ];
+  }
+  const out = [parseStatement(input, tokens, TOP)];
+  for (const body of subSelectBodies(tokens)) {
+    const text = tokensToString(body);
+    out.push(parseStatement(text, body, SUB));
+  }
+  return out;
+}
+function subSelectBodies(tokens) {
+  const bodies = [];
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    const open = tokens[i];
+    if (open.type !== "punct" || open.value !== "(") continue;
+    if (!isWord(tokens[i + 1], "select")) continue;
+    const close = matchingClose(tokens, i);
+    const base = open.depth;
+    bodies.push(tokens.slice(i + 1, close).map((t) => ({ ...t, depth: t.depth - base - 1 })));
+  }
+  return bodies;
+}
+function blankQuery(input) {
+  return {
     sql: evidence(input),
     fingerprint: fingerprint(input),
     kind: "unknown",
@@ -446,22 +486,15 @@ function parseSql(input) {
     groupBy: [],
     notes: []
   };
+}
+function bailOut(input, err) {
+  return { ...blankQuery(input), notes: [`\u89E3\u6790\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A${err.message}`] };
+}
+function parseStatement(input, tokens, ctx) {
+  const notes = [];
   try {
-    const tokens = tokenize(stripComments(input));
-    if (tokens.length === 0) {
-      return { ...empty, notes: ["\u7A7A\u8BED\u53E5\uFF0C\u5DF2\u8DF3\u8FC7"] };
-    }
-    const merged = countMergedStatements(tokens);
-    if (merged > 0) {
-      return {
-        ...empty,
-        notes: [
-          `\u8FD9\u6761\u8F93\u5165\u91CC\u6DF7\u4E86 ${merged + 1} \u4E2A\u8BED\u53E5\u4F46\u6CA1\u6709\u4EFB\u4F55\u5206\u53F7\u5206\u9694\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A\u628A\u5B83\u4EEC\u5F53\u6210\u4E00\u6761\u89E3\u6790\u4F1A\u7ED9\u51FA\u8DE8\u8868\u7684\u7D22\u5F15\u5EFA\u8BAE\u3002\u6BCF\u6761\u8BED\u53E5\u8BF7\u4EE5 ; \u7ED3\u5C3E\u3002`
-        ]
-      };
-    }
     const kind = statementKind(tokens);
-    const parsed = analyse(kind, tokens, notes);
+    const parsed = analyse(kind, tokens, notes, ctx);
     return {
       sql: evidence(input),
       fingerprint: fingerprint(input),
@@ -476,13 +509,13 @@ function parseSql(input) {
       limit: parsed.limit,
       whereText: parsed.whereText,
       orderByText: parsed.orderByText,
+      // Only set on a body lifted out of parentheses; the key must not exist for
+      // a top-level statement, or every snapshot and JSON dump grows a null.
+      ...ctx.subquery ? { subquery: true } : {},
       notes
     };
   } catch (err) {
-    return {
-      ...empty,
-      notes: [`\u89E3\u6790\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A${err.message}`]
-    };
+    return { ...blankQuery(input), notes: [`\u89E3\u6790\u5931\u8D25\uFF0C\u5DF2\u8DF3\u8FC7\uFF1A${err.message}`] };
   }
 }
 function statementKind(tokens) {
@@ -496,6 +529,8 @@ function statementKind(tokens) {
   if (v === "with") return "unknown";
   return "unknown";
 }
+var TOP = { subquery: false };
+var SUB = { subquery: true };
 function blank() {
   return {
     tables: [],
@@ -507,19 +542,19 @@ function blank() {
     groupBy: []
   };
 }
-function analyse(kind, tokens, notes) {
+function analyse(kind, tokens, notes, ctx) {
   const topUnion = indexOfWord(tokens, "union", 0, 0);
   if (topUnion !== -1) {
-    notes.push("UNION \u8BED\u53E5\u53EA\u5206\u6790\u7B2C\u4E00\u4E2A\u5206\u652F");
+    notes.push("UNION \u53EA\u5206\u6790\u7B2C\u4E00\u4E2A\u5206\u652F\uFF08\u5E26\u62EC\u53F7\u7684\u5206\u652F\u4F1A\u6309\u72EC\u7ACB\u8BED\u53E5\u5206\u6790\uFF09\uFF1B\u65E0\u62EC\u53F7\u7684\u540E\u7EED\u5206\u652F\u672A\u53C2\u4E0E\u5224\u5B9A");
     tokens = tokens.slice(0, topUnion);
   }
   switch (kind) {
     case "select":
-      return analyseSelect(tokens, notes);
+      return analyseSelect(tokens, notes, ctx);
     case "update":
-      return analyseUpdate(tokens, notes);
+      return analyseUpdate(tokens, notes, ctx);
     case "delete":
-      return analyseDelete(tokens, notes);
+      return analyseDelete(tokens, notes, ctx);
     case "insert":
       return analyseInsert(tokens, notes);
     default:
@@ -546,7 +581,7 @@ function clauseBoundary(tokens, from) {
   ].filter((i) => i > from);
   return candidates.length > 0 ? Math.min(...candidates) : tokens.length;
 }
-function analyseSelect(tokens, notes) {
+function analyseSelect(tokens, notes, ctx) {
   const out = blank();
   const fromIdx = indexOfWord(tokens, "from", 0, 0);
   const selectEnd = fromIdx === -1 ? tokens.length : fromIdx;
@@ -556,12 +591,12 @@ function analyseSelect(tokens, notes) {
     return out;
   }
   const end = clauseBoundary(tokens, fromIdx);
-  readFrom(tokens.slice(fromIdx + 1, end), out, notes);
+  readFrom(tokens.slice(fromIdx + 1, end), out, notes, ctx);
   const whereStart = indexOfWord(tokens, "where", fromIdx, 0);
   if (whereStart !== -1 && whereStart >= end) {
     const whereEnd = findNextClause(tokens, whereStart, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereStart + 1, whereEnd));
-    readWhere(tokens.slice(whereStart + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereStart + 1, whereEnd), out, notes, ctx);
   }
   const groupIdx = findTwoWord(tokens, "group", "by");
   if (groupIdx > fromIdx) {
@@ -588,14 +623,14 @@ function findNextClause(tokens, from, fallback) {
   ].filter((i) => i > from).sort((a, b) => a - b);
   return idxs.length > 0 ? idxs[0] : fallback;
 }
-function analyseUpdate(tokens, notes) {
+function analyseUpdate(tokens, notes, ctx) {
   const out = blank();
   const setIdx = indexOfWord(tokens, "set", 0, 0);
   if (setIdx === -1) {
     notes.push("UPDATE \u8BED\u53E5\u7F3A\u5C11 SET\uFF0C\u5DF2\u8DF3\u8FC7");
     return out;
   }
-  readFrom(tokens.slice(1, setIdx), out, notes);
+  readFrom(tokens.slice(1, setIdx), out, notes, ctx);
   const whereIdx = indexOfWord(tokens, "where", setIdx, 0);
   const setEnd = whereIdx === -1 ? clauseBoundary(tokens, setIdx) : whereIdx;
   for (const assign of splitOnComma(tokens.slice(setIdx + 1, setEnd))) {
@@ -607,7 +642,7 @@ function analyseUpdate(tokens, notes) {
   if (whereIdx !== -1) {
     const whereEnd = findNextClause(tokens, whereIdx, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereIdx + 1, whereEnd));
-    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes, ctx);
   }
   const orderIdx = findTwoWord(tokens, "order", "by");
   if (orderIdx !== -1) {
@@ -618,7 +653,7 @@ function analyseUpdate(tokens, notes) {
   if (limitIdx !== -1) out.limit = readLimit(tokens.slice(limitIdx + 1));
   return out;
 }
-function analyseDelete(tokens, notes) {
+function analyseDelete(tokens, notes, ctx) {
   const out = blank();
   const fromIdx = indexOfWord(tokens, "from", 0, 0);
   if (fromIdx === -1) {
@@ -626,12 +661,12 @@ function analyseDelete(tokens, notes) {
     return out;
   }
   const end = clauseBoundary(tokens, fromIdx);
-  readFrom(tokens.slice(fromIdx + 1, end), out, notes);
+  readFrom(tokens.slice(fromIdx + 1, end), out, notes, ctx);
   const whereIdx = indexOfWord(tokens, "where", fromIdx, 0);
   if (whereIdx !== -1) {
     const whereEnd = findNextClause(tokens, whereIdx, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereIdx + 1, whereEnd));
-    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes, ctx);
   }
   const orderIdx = findTwoWord(tokens, "order", "by");
   if (orderIdx !== -1) {
@@ -670,7 +705,7 @@ var JOIN_PARTICLES = /* @__PURE__ */ new Set([
   "natural",
   "straight_join"
 ]);
-function readFrom(tokens, out, notes) {
+function readFrom(tokens, out, notes, ctx) {
   let pos = 0;
   let role = "FROM";
   const particles = [];
@@ -704,7 +739,7 @@ function readFrom(tokens, out, notes) {
         pos += 1;
       }
       for (const pred of splitOnAnd(tokens.slice(condStart, pos))) {
-        out.columns.push(...classifyPredicate(pred, "join-on", notes));
+        out.columns.push(...classifyPredicate(pred, "join-on", notes, ctx));
       }
       continue;
     }
@@ -726,7 +761,7 @@ function readFrom(tokens, out, notes) {
 }
 function pushTable(tokens, role, out, notes) {
   if (tokens[0]?.value === "(") {
-    notes.push("FROM \u5B50\u67E5\u8BE2\u672A\u5C55\u5F00\uFF0C\u53EA\u5206\u6790\u5916\u5C42\u6761\u4EF6");
+    notes.push("FROM \u5B50\u67E5\u8BE2\u5DF2\u6309\u72EC\u7ACB\u8BED\u53E5\u5206\u6790\uFF1B\u5916\u5C42\u9488\u5BF9\u6D3E\u751F\u8868\u522B\u540D\u7684\u8FC7\u6EE4\u6761\u4EF6\u65E0\u6CD5\u5BF9\u5E94\u5230\u7269\u7406\u8868\uFF0C\u672A\u53C2\u4E0E\u5224\u5B9A");
     return;
   }
   const table = parseTableRef(tokens, role);
@@ -793,14 +828,14 @@ function stripTrailingAlias(tokens, out) {
   }
   return tokens;
 }
-function readWhere(tokens, out, notes) {
+function readWhere(tokens, out, notes, ctx) {
   if (tokens.length === 0) return;
   const orIdx = indexOfWord(tokens, "or", 0, 0);
   if (orIdx !== -1) {
     notes.push("WHERE \u542B\u9876\u5C42 OR\uFF0C\u7D22\u5F15\u5EFA\u8BAE\u6309\u6700\u5DE6\u524D\u7F00\u4EA4\u96C6\u4FDD\u5B88\u5904\u7406");
   }
   for (const pred of splitOnAnd(tokens)) {
-    out.columns.push(...classifyPredicate(pred, "where", notes));
+    out.columns.push(...classifyPredicate(pred, "where", notes, ctx));
   }
 }
 function unwrapConditionGroup(tokens) {
@@ -810,8 +845,8 @@ function unwrapConditionGroup(tokens) {
   const base = tokens[0].depth;
   return tokens.slice(1, -1).map((t) => ({ ...t, depth: t.depth - base - 1 }));
 }
-function classifyOr(branches, scope, notes) {
-  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes)).filter((g) => g.length > 0);
+function classifyOr(branches, scope, notes, ctx) {
+  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes, ctx)).filter((g) => g.length > 0);
   if (perBranch.length === 0) return [];
   const oneColumnPerBranch = perBranch.every((g) => g.length === 1);
   const columns = perBranch.map((g) => g[0].column);
@@ -825,18 +860,18 @@ function classifyOr(branches, scope, notes) {
 function joinOrBranches(branches) {
   return branches.reduce((acc, b, i) => i === 0 ? [...b] : [...acc, { type: "word", value: "or" }, ...b], []);
 }
-function classifyPredicate(pred, scope, notes) {
+function classifyPredicate(pred, scope, notes, ctx) {
   if (pred.length === 0) return [];
   const unwrapped = unwrapConditionGroup(pred);
   if (unwrapped) {
     const andGroups = splitOnAnd(unwrapped);
     if (andGroups.length > 1) {
-      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes));
+      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes, ctx));
     }
-    return classifyPredicate(unwrapped, scope, notes);
+    return classifyPredicate(unwrapped, scope, notes, ctx);
   }
   const orBranches = splitOnWord(pred, "or");
-  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes);
+  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes, ctx);
   const operator = detectOperator(pred);
   if (!operator) {
     if (!isWord(pred[0], "not", "exists")) {
@@ -858,7 +893,8 @@ function classifyPredicate(pred, scope, notes) {
   switch (operator.kind) {
     case "eq": {
       const rightRef = columnFromTokens(right, baseScope);
-      if (rightRef && !isWord(right[0], "null")) {
+      const outerColumn = ctx.subquery && !rightRef?.table;
+      if (rightRef && !isWord(right[0], "null") && !outerColumn) {
         rightRef.op = operator.text;
         rightRef.predicateText = tokensToString(pred);
         rightRef.valueText = leftRef.raw;
@@ -872,10 +908,7 @@ function classifyPredicate(pred, scope, notes) {
       break;
     }
     case "in": {
-      if (right.some((t) => isWord(t, "select"))) {
-        leftRef.op = "in-subquery";
-        notes.push(`IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09\uFF1A${truncate(tokensToString(right))}`);
-      }
+      if (right.some((t) => isWord(t, "select"))) leftRef.op = "in-subquery";
       break;
     }
     default:
@@ -1039,6 +1072,49 @@ function resolveTable(ref, parsed) {
   return hit?.name;
 }
 
+// src/core/subqueries.ts
+function withSubqueryRecords(records) {
+  const out = [];
+  const byFingerprint = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    if (!byFingerprint.has(record.fingerprint)) byFingerprint.set(record.fingerprint, record);
+  }
+  for (const record of records) {
+    out.push(record);
+    if (record.parsed.subquery) continue;
+    for (const inner of parseSqlAll(record.sql).slice(1)) {
+      const seen = byFingerprint.get(inner.fingerprint);
+      if (seen) {
+        foldInto(seen, record);
+        continue;
+      }
+      const created = {
+        fingerprint: inner.fingerprint,
+        sql: inner.sql,
+        source: record.source,
+        parsed: inner,
+        input: record.input,
+        statementId: `${record.statementId ?? record.fingerprint.slice(0, 12)}#subquery`,
+        namespace: record.namespace,
+        rawInterpolation: record.rawInterpolation,
+        occurrences: record.occurrences,
+        totalQueryTime: record.totalQueryTime,
+        maxRowsExamined: record.maxRowsExamined,
+        metrics: record.metrics
+      };
+      byFingerprint.set(inner.fingerprint, created);
+      out.push(created);
+    }
+  }
+  return out;
+}
+function foldInto(existing, from) {
+  if (existing === from) return;
+  existing.occurrences = (existing.occurrences ?? 0) + (from.occurrences ?? 0);
+  existing.totalQueryTime = (existing.totalQueryTime ?? 0) + (from.totalQueryTime ?? 0);
+  existing.maxRowsExamined = Math.max(existing.maxRowsExamined ?? 0, from.maxRowsExamined ?? 0);
+}
+
 // src/parsers/slowlog.ts
 var RE_TIME = /^#\s*Time:\s*(.+)$/;
 var RE_USER_HOST = /^#\s*User@Host:\s*(.+)$/;
@@ -1164,8 +1240,8 @@ function aggregate(events, file, ignoredEvents) {
       input: "slowlog"
     });
   }
-  const records = [...byFingerprint.values()].sort(
-    (a, b) => (b.totalQueryTime ?? 0) - (a.totalQueryTime ?? 0)
+  const records = withSubqueryRecords(
+    [...byFingerprint.values()].sort((a, b) => (b.totalQueryTime ?? 0) - (a.totalQueryTime ?? 0))
   );
   return { records, ignoredEvents, totalEvents };
 }
@@ -1459,7 +1535,7 @@ function mapperStatementsToRecords(statements) {
       });
     }
   }
-  return records;
+  return withSubqueryRecords(records);
 }
 
 // src/core/input.ts
@@ -1483,8 +1559,6 @@ function isDirectory(path) {
 }
 var REASON_PREFIX_EN = [
   ["\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped"],
-  ["IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A", "tables inside the IN subquery took part in no rule"],
-  ["\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09", " (outer statement only)"],
   ["\uFF0C\u5DF2\u8DF3\u8FC7", ", skipped"],
   ["\u672A\u627E\u5230\u7247\u6BB5", "fragment not found"],
   ["\u52A8\u6001\u5206\u652F\u7EC4\u5408\u8D85\u8FC7", "dynamic branch combinations exceeded"],
@@ -1494,10 +1568,23 @@ var REASON_PREFIX_EN = [
   ["WHERE \u542B\u9876\u5C42 OR", "WHERE contains a top-level OR"],
   ["\u6761\u8BED\u53E5", "statement(s)"],
   ["include refid", "include refid"],
+  ["UNION \u53EA\u5206\u6790\u7B2C\u4E00\u4E2A\u5206\u652F", "only the first UNION branch is analysed"],
+  ["\uFF08\u5E26\u62EC\u53F7\u7684\u5206\u652F\u4F1A\u6309\u72EC\u7ACB\u8BED\u53E5\u5206\u6790\uFF09", " (a bracketed branch is analysed as a statement of its own)"],
+  ["\u4E0D\u652F\u6301\u7684\u8BED\u53E5\u7C7B\u578B", "unsupported statement type"],
+  ["\uFF08\u652F\u6301 ", " (supported: "],
+  ["\u65E0\u62EC\u53F7\u7684\u540E\u7EED\u5206\u652F\u672A\u53C2\u4E0E\u5224\u5B9A", "later unbracketed branches took no rule"],
+  // A derived table is analysed as its own statement now; what is left out is the
+  // outer filter on its alias, so the translation has to carry that distinction.
+  ["FROM \u5B50\u67E5\u8BE2\u5DF2\u6309\u72EC\u7ACB\u8BED\u53E5\u5206\u6790", "the FROM subquery is analysed as a statement of its own"],
+  ["\uFF1B\u5916\u5C42\u9488\u5BF9\u6D3E\u751F\u8868\u522B\u540D\u7684\u8FC7\u6EE4\u6761\u4EF6", "; but an outer filter on the derived table's alias "],
+  ["\u65E0\u6CD5\u5BF9\u5E94\u5230\u7269\u7406\u8868", "cannot be mapped to a physical table"],
+  ["\u672A\u53C2\u4E0E\u5224\u5B9A", "and took no rule"],
   // Punctuation last: a note is easier to read in the English report when the
   // full-width colon and comma inside it are normalised too.
   ["\uFF1A", ": "],
-  ["\uFF0C", ", "]
+  ["\uFF1B", "; "],
+  ["\uFF0C", ", "],
+  ["\uFF09", ")"]
 ];
 function englishReason(reason) {
   let out = reason;
@@ -1518,11 +1605,14 @@ function loadInput(source, options = {}) {
   const notes = [];
   const kind = options.kind ?? detectInputKind(source);
   if (options.inline || !options.kind && !existsSync(source)) {
-    const records = splitStatements(source).map((sql) => {
+    const outer = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql", occurrences: 1 };
     });
+    const records = withSubqueryRecords(outer);
+    for (const record of records) {
+      if (record.parsed.notes.length > 0) notes.push(...record.parsed.notes.map(parseNote));
+    }
     return { kind: "sql", notes, records };
   }
   if (kind === "mapper") {
@@ -1607,7 +1697,7 @@ function buildRecordsFromSqlText(text, file) {
     line += 1;
   }
   flush();
-  return records;
+  return withSubqueryRecords(records);
 }
 function readTextFile(path) {
   if (!existsSync(path)) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${path}`);

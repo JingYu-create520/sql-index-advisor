@@ -19,6 +19,38 @@ export interface SkippedRule {
   count: number;
 }
 
+/**
+ * How much of the run a skip covers.
+ *
+ * `skipped` used to read as a verdict on the whole run: analysing
+ * `WITH c AS (SELECT ...) SELECT ...` gives one record with no table and one with
+ * a real access path, and the footer said "not evaluated: SIA001" while SIA001
+ * was two lines above it, with a suggestion. A rule skipped on three of five
+ * statements is not a rule that stayed silent.
+ */
+export function skippedFraction(skipped: SkippedRule, total: number): string {
+  return total > 0 && skipped.count < total ? `${skipped.count}/${total}` : "";
+}
+
+/**
+ * The reason plus, when it is not the whole run, how much of the run it covers.
+ * Shared so the terminal, the CI annotations and the migration header cannot
+ * disagree about what was skipped — they have one job and one wording.
+ */
+export function skippedCover(
+  skipped: SkippedRule,
+  total: number,
+  lang: "zh" | "en",
+  reason: string,
+): string {
+  if (!skippedFraction(skipped, total)) return reason;
+  // No parentheses of its own: the CI annotation and the migration header wrap
+  // this text in a pair already, and `SIA001 (reason (on 1 of 2))` is unreadable.
+  return lang === "en"
+    ? `${reason}, on ${skipped.count} of ${total} statements`
+    : `${reason}，${total} 条中的 ${skipped.count} 条`;
+}
+
 export interface AnalyzeOptions extends Partial<RuleOptions> {
   schema?: Schema;
   rules?: Rule[];

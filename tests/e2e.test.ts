@@ -38,13 +38,18 @@ describe("examples inventory", () => {
     expect(records.every((r) => (r.source?.line ?? 0) > 0)).toBe(true);
   });
 
-  it("the mapper directory yields 8 statements including both <choose> branches", () => {
+  it("the mapper directory yields 8 statements, plus the body of its subquery", () => {
     const statements = loadMapperFiles(discoverMapperFiles("examples/mapper"));
     const records = mapperStatementsToRecords(statements);
-    expect(records).toHaveLength(8);
+    expect(records).toHaveLength(9);
     expect(statements).toHaveLength(7);
-    expect(records.filter((r) => r.statementId?.startsWith("selectPage"))).toHaveLength(2);
+    expect(records.filter((r) => r.statementId?.startsWith("selectPage"))).toHaveLength(3);
     expect(records.find((r) => r.statementId === "searchByRemark")?.rawInterpolation).toBe(true);
+    // The EXISTS body inside selectPage is analysed as a statement of its own, so
+    // the table behind it gets a verdict instead of a caveat.
+    const lifted = records.find((r) => r.parsed.subquery);
+    expect(lifted?.parsed.tables.map((t) => t.name)).toEqual(["user_address"]);
+    expect(lifted?.source?.line ?? 0).toBeGreaterThan(0);
   });
 
   it("inline SQL produces exactly one record", () => {

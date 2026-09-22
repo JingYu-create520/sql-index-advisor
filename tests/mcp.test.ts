@@ -32,6 +32,23 @@ describe("MCP tool handlers", () => {
     expect(report.findings.some((f) => f.rule === "SIA004")).toBe(true);
   });
 
+  it("analyze_mapper reaches a table that only appears inside a subquery", () => {
+    const result = analyzeMapperTool({
+      xml: `<mapper namespace="demo">
+        <select id="list" resultType="int">
+          select id from users u where u.level = 1
+            and exists (select 1 from user_address a where a.user_id = u.id and a.city = #{city})
+        </select>
+      </mapper>`,
+    });
+    expect(result.isError).toBeFalsy();
+    const report = JSON.parse(result.content[0]!.text.split(BANNER)[1]!.trim()) as {
+      findings: Array<{ table?: string; indexColumns?: string[] }>;
+    };
+    const inner = report.findings.find((f) => f.table === "user_address");
+    expect(inner?.indexColumns).toEqual(["user_id", "city"]);
+  });
+
   it("accepts an inline schema document, not only a path", () => {
     const inline = JSON.stringify({
       tables: [{ name: "t", columns: [{ name: "a", type: "int" }], indexes: [] }],

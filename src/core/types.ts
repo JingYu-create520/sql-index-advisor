@@ -83,6 +83,13 @@ export interface ParsedQuery {
   /** Normalised text with literals replaced by `?`. */
   fingerprint: string;
   kind: StatementKind;
+  /**
+   * True for a parse lifted out of a parenthesised `SELECT` — the list of an
+   * `IN (SELECT ...)`, an `EXISTS (SELECT ...)` body, a `FROM (SELECT ...) d`
+   * derived table. It is analysed on its own, so its predicates are read with
+   * the looser rules a correlated body needs (see `parsers/sql.ts` `ParseCtx`).
+   */
+  subquery?: boolean;
   /** Driven table plus every JOINed table. */
   tables: TableRef[];
   columns: ColumnRef[];

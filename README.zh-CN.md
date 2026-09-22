@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.12](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.12) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.13](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.13) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -199,11 +199,12 @@ sia slow.log --llm
 - 宁可沉默也不猜。已知边界全部写在这里，不做遮掩：
   - Mapper 里的 `LIMIT #{offset}, #{size}` 没有静态值，SIA006 判不了，这种情况请把慢日志喂进来。
   - `mobile = ?` 绑的是 Java `Long`，SIA005 看不见参数类型。
-  - 相关子查询不展开。SIA006 会降级成只给模板，不敢给出可能改变结果集的改写。
-  - `IN (SELECT ...)` 里的表不参与判定，只看外层。现在每条这样的语句都会写明这一点，不再安静；要覆盖内层得把它们当成独立语句来解析，这一步我们还没做。
+  - 相关子查询在**改写语句**时不展开：SIA006 会降级成只给模板，不敢给出可能改变结果集的改写。但它的表会被单独分析（见下文）。
+  - 针对派生表别名的过滤条件——`FROM (SELECT ...) d` 之后的 `WHERE d.total > 10`——对不上任何物理表，所以只会说明情况，不会猜一张表。别名背后的那段查询会独立分析。
+  - 没带括号的 `UNION` 仍然只看第一个分支，因为结尾的 `ORDER BY`/`LIMIT` 属于整个 UNION 的结果、不属于最后一段。带括号的分支是一条独立语句，会被分析。
   - `LIMIT ?, ?` 根本判不了深度，因为偏移量是绑定参数。现在会明确写成"分页偏移量是绑定参数，静态看不到大小"，而不是无声消失；真实项目里的解法是把慢日志喂进来，那里的偏移量是数字。
 
-支持的 SQL 子集：每条语句一个 `SELECT` / `INSERT` / `UPDATE` / `DELETE`（内联输入和 `analyze_sql` 支持多条，用 `;` 分隔），ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`（以 `%` 开头的 `LIKE` 会被明确报成无法用索引，而不是被忽略）、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。挤在一起又没写分号的语句会被直接拒绝，不会硬猜：把两条查询当成一条解析，给出的就是另一张表的索引。
+支持的 SQL 子集：每条语句一个 `SELECT` / `INSERT` / `UPDATE` / `DELETE`（内联输入和 `analyze_sql` 支持多条，用 `;` 分隔），ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`（以 `%` 开头的 `LIKE` 会被明确报成无法用索引，而不是被忽略）、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。括号里的 `SELECT`——`IN (SELECT ...)` 的列表、`EXISTS (SELECT ...)`、`FROM (SELECT ...) d` 的内层——不论嵌套多深都会被当作独立语句解析。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。挤在一起又没写分号的语句会被直接拒绝，不会硬猜：把两条查询当成一条解析，给出的就是另一张表的索引。
 
 ## 它答错过的地方
 
@@ -243,6 +244,8 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 **括号里的条件组是黑盒。** 括号内的 token 深度是 1，而 AND/OR 拆分只匹配深度 0，所以 `AND (a = 1 OR b = 2)`——MyBatis `<where>` 里最常见的形状——会被当成"无法识别的谓词"整块丢掉。现在会先剥括号并把内部条件提回本层再分类，上面那两种 OR 也因此才可达：同一列的 OR 折叠成 IN 列表，跨列的 OR 只给解释、不给 DDL，因为只建单侧索引就是那条没用的建议。
 
+**子查询里的那张表从来没被看过。** `WHERE permission_id IN (SELECT role_id FROM upms_user_role WHERE user_id = ?)` 是两条语句、两张表都要索引，而工具只解析了外层：内层表不给建议，只写一条"这里没分析"的说明。`FROM (SELECT ...) d` 同理。四个被审计的开源 MyBatis 项目——378 个 mapper XML、1666 条语句记录——一共藏着 17 条这种内层查询。不常见，但每一条都是权限查询或报表分页，缺的那条索引是实打实的。这次审计里冒出来的两条：`paicoding` 的 `EXISTS (SELECT 1 FROM column_article ca WHERE ca.article_id = a.id AND ca.column_id = ?)` 现在拿到 `(article_id, column_id)`；`zheng` 的 `upms_user_role`，建表语句里除了主键什么都没有，现在会为内层那次扫描拿到 `ADD INDEX (user_id)`。做法是把任意深度的括号内 `SELECT` 提成独立语句再分析。为了敢这么做，有一处是刻意放弃的：子查询里 `=` 右边那个不带表名限定的列不再当作候选，因为 MySQL 是由内向外解析这个名字的，它可能是外层表的列——给一张表建一个它自己并没有的列的索引，比不建更糟。仍然没做、而且报告里会明说的两件事：按派生表别名过滤的条件对不上物理表；没带括号的 `UNION` 后续分支依然不参与判定。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
@@ -264,7 +267,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-249 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+270 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 
 import type { AnalysisResult } from "../rules/engine.js";
+import { skippedCover } from "../rules/engine.js";
 import type { Finding, Severity } from "../core/types.js";
 import { ruleById } from "../rules/registry.js";
 
@@ -56,7 +57,7 @@ export function renderGithub(result: AnalysisResult, lang: "zh" | "en" = "en"): 
   }
   if (result.skipped.length > 0) {
     const detail = result.skipped
-      .map((s) => `${s.id} (${lang === "en" ? s.reasonEn : s.reason})`)
+      .map((s) => `${s.id} (${skippedCover(s, result.records, lang, lang === "en" ? s.reasonEn : s.reason)})`)
       .join(", ");
     lines.push(
       `::notice title=sql-index-advisor::${escapeData(

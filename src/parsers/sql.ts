@@ -127,8 +127,75 @@ export function splitStatements(text: string): string[] {
 }
 
 export function parseSql(input: string): ParsedQuery {
-  const notes: string[] = [];
-  const empty: ParsedQuery = {
+  return parseSqlAll(input)[0]!;
+}
+
+/**
+ * The outer statement first, then every `SELECT` that lives inside parentheses:
+ * the list of an `IN (SELECT ...)`, the body of an `EXISTS (SELECT ...)`, the
+ * derived table behind `FROM (SELECT ...) d`. Each of those runs against its own
+ * tables and needs its own indexes, which the outer statement cannot see — the
+ * first version of this tool only said so in a note and left the inner table
+ * unexamined, which is a miss, not an honest skip.
+ *
+ * They are returned as sibling parses rather than merged into the outer one:
+ * a bucket of columns from a table the outer query never names would make every
+ * per-table rule reason about a table it does not join.
+ */
+export function parseSqlAll(input: string): ParsedQuery[] {
+  let tokens: Token[];
+  try {
+    tokens = tokenize(stripComments(input));
+  } catch (err) {
+    return [bailOut(input, err)];
+  }
+
+  if (tokens.length === 0) return [{ ...blankQuery(input), notes: ["空语句，已跳过"] }];
+
+  const merged = countMergedStatements(tokens);
+  if (merged > 0) {
+    // Nothing inside a blob we refused to parse is trustworthy, subqueries included.
+    return [
+      {
+        ...blankQuery(input),
+        notes: [
+          `这条输入里混了 ${merged + 1} 个语句但没有任何分号分隔，已跳过：把它们当成一条解析会给出跨表的索引建议。每条语句请以 ; 结尾。`,
+        ],
+      },
+    ];
+  }
+
+  const out = [parseStatement(input, tokens, TOP)];
+  for (const body of subSelectBodies(tokens)) {
+    const text = tokensToString(body);
+    out.push(parseStatement(text, body, SUB));
+  }
+  return out;
+}
+
+/**
+ * Every `( SELECT ... )` body in this statement, at any nesting level.
+ *
+ * Deliberately not collapsed: a subquery inside a subquery has its own tables and
+ * its own indexes to reason about, and the outer body cannot see them either.
+ */
+function subSelectBodies(tokens: Token[]): Token[][] {
+  const bodies: Token[][] = [];
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    const open = tokens[i]!;
+    if (open.type !== "punct" || open.value !== "(") continue;
+    if (!isWord(tokens[i + 1], "select")) continue;
+    const close = matchingClose(tokens, i);
+    const base = open.depth;
+    // The body keeps the depths it was tokenised with, so relift it by one level:
+    // parsed on its own, its own keywords sit at depth 0 like any top statement.
+    bodies.push(tokens.slice(i + 1, close).map((t) => ({ ...t, depth: t.depth - base - 1 })));
+  }
+  return bodies;
+}
+
+function blankQuery(input: string): ParsedQuery {
+  return {
     sql: evidence(input),
     fingerprint: fingerprint(input),
     kind: "unknown",
@@ -141,25 +208,17 @@ export function parseSql(input: string): ParsedQuery {
     groupBy: [],
     notes: [],
   };
+}
 
+function bailOut(input: string, err: unknown): ParsedQuery {
+  return { ...blankQuery(input), notes: [`解析失败，已跳过：${(err as Error).message}`] };
+}
+
+function parseStatement(input: string, tokens: Token[], ctx: ParseCtx): ParsedQuery {
+  const notes: string[] = [];
   try {
-    const tokens = tokenize(stripComments(input));
-    if (tokens.length === 0) {
-      return { ...empty, notes: ["空语句，已跳过"] };
-    }
-
-    const merged = countMergedStatements(tokens);
-    if (merged > 0) {
-      return {
-        ...empty,
-        notes: [
-          `这条输入里混了 ${merged + 1} 个语句但没有任何分号分隔，已跳过：把它们当成一条解析会给出跨表的索引建议。每条语句请以 ; 结尾。`,
-        ],
-      };
-    }
-
     const kind = statementKind(tokens);
-    const parsed = analyse(kind, tokens, notes);
+    const parsed = analyse(kind, tokens, notes, ctx);
 
     return {
       sql: evidence(input),
@@ -175,13 +234,13 @@ export function parseSql(input: string): ParsedQuery {
       limit: parsed.limit,
       whereText: parsed.whereText,
       orderByText: parsed.orderByText,
+      // Only set on a body lifted out of parentheses; the key must not exist for
+      // a top-level statement, or every snapshot and JSON dump grows a null.
+      ...(ctx.subquery ? { subquery: true } : {}),
       notes,
     };
   } catch (err) {
-    return {
-      ...empty,
-      notes: [`解析失败，已跳过：${(err as Error).message}`],
-    };
+    return { ...blankQuery(input), notes: [`解析失败，已跳过：${(err as Error).message}`] };
   }
 }
 
@@ -210,6 +269,21 @@ interface Partial {
   orderByText?: string;
 }
 
+/**
+ * Which statement shape we are inside. A subquery's own tables are all it can
+ * index, and MySQL resolves an unqualified name in a correlated predicate from
+ * the inside out — so a bare column on the right of `=` there may belong to the
+ * *outer* query (`WHERE child_id = parent_id`), and proposing an index column
+ * the inner table does not have is worse than saying nothing. Qualified names
+ * need no special case: `resolveTable` already drops an unknown qualifier.
+ */
+interface ParseCtx {
+  subquery: boolean;
+}
+
+const TOP: ParseCtx = { subquery: false };
+const SUB: ParseCtx = { subquery: true };
+
 function blank(): Partial {
   return {
     tables: [],
@@ -222,20 +296,25 @@ function blank(): Partial {
   };
 }
 
-function analyse(kind: StatementKind, tokens: Token[], notes: string[]): Partial {
+function analyse(kind: StatementKind, tokens: Token[], notes: string[], ctx: ParseCtx): Partial {
   const topUnion = indexOfWord(tokens, "union", 0, 0);
   if (topUnion !== -1) {
-    notes.push("UNION 语句只分析第一个分支");
+    // The first branch is this parse. A *parenthesised* branch is a `( SELECT ...)`
+    // block, so `parseSqlAll` lifts it out as its own statement; a bare one
+    // (`... UNION SELECT ...`) has no parentheses to cut on, and a trailing
+    // `ORDER BY` / `LIMIT` belongs to the union result rather than to the last
+    // branch — guessing which table to index for it is how wrong DDL gets written.
+    notes.push("UNION 只分析第一个分支（带括号的分支会按独立语句分析）；无括号的后续分支未参与判定");
     tokens = tokens.slice(0, topUnion);
   }
 
   switch (kind) {
     case "select":
-      return analyseSelect(tokens, notes);
+      return analyseSelect(tokens, notes, ctx);
     case "update":
-      return analyseUpdate(tokens, notes);
+      return analyseUpdate(tokens, notes, ctx);
     case "delete":
-      return analyseDelete(tokens, notes);
+      return analyseDelete(tokens, notes, ctx);
     case "insert":
       return analyseInsert(tokens, notes);
     default:
@@ -266,7 +345,7 @@ function clauseBoundary(tokens: Token[], from: number): number {
   return candidates.length > 0 ? Math.min(...candidates) : tokens.length;
 }
 
-function analyseSelect(tokens: Token[], notes: string[]): Partial {
+function analyseSelect(tokens: Token[], notes: string[], ctx: ParseCtx): Partial {
   const out = blank();
   const fromIdx = indexOfWord(tokens, "from", 0, 0);
 
@@ -279,13 +358,13 @@ function analyseSelect(tokens: Token[], notes: string[]): Partial {
   }
 
   const end = clauseBoundary(tokens, fromIdx);
-  readFrom(tokens.slice(fromIdx + 1, end), out, notes);
+  readFrom(tokens.slice(fromIdx + 1, end), out, notes, ctx);
 
   const whereStart = indexOfWord(tokens, "where", fromIdx, 0);
   if (whereStart !== -1 && whereStart >= end) {
     const whereEnd = findNextClause(tokens, whereStart, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereStart + 1, whereEnd));
-    readWhere(tokens.slice(whereStart + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereStart + 1, whereEnd), out, notes, ctx);
   }
 
   const groupIdx = findTwoWord(tokens, "group", "by");
@@ -320,14 +399,14 @@ function findNextClause(tokens: Token[], from: number, fallback: number): number
   return idxs.length > 0 ? idxs[0]! : fallback;
 }
 
-function analyseUpdate(tokens: Token[], notes: string[]): Partial {
+function analyseUpdate(tokens: Token[], notes: string[], ctx: ParseCtx): Partial {
   const out = blank();
   const setIdx = indexOfWord(tokens, "set", 0, 0);
   if (setIdx === -1) {
     notes.push("UPDATE 语句缺少 SET，已跳过");
     return out;
   }
-  readFrom(tokens.slice(1, setIdx), out, notes);
+  readFrom(tokens.slice(1, setIdx), out, notes, ctx);
 
   const whereIdx = indexOfWord(tokens, "where", setIdx, 0);
   const setEnd = whereIdx === -1 ? clauseBoundary(tokens, setIdx) : whereIdx;
@@ -341,7 +420,7 @@ function analyseUpdate(tokens: Token[], notes: string[]): Partial {
   if (whereIdx !== -1) {
     const whereEnd = findNextClause(tokens, whereIdx, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereIdx + 1, whereEnd));
-    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes, ctx);
   }
   const orderIdx = findTwoWord(tokens, "order", "by");
   if (orderIdx !== -1) {
@@ -353,7 +432,7 @@ function analyseUpdate(tokens: Token[], notes: string[]): Partial {
   return out;
 }
 
-function analyseDelete(tokens: Token[], notes: string[]): Partial {
+function analyseDelete(tokens: Token[], notes: string[], ctx: ParseCtx): Partial {
   const out = blank();
   const fromIdx = indexOfWord(tokens, "from", 0, 0);
   if (fromIdx === -1) {
@@ -361,13 +440,13 @@ function analyseDelete(tokens: Token[], notes: string[]): Partial {
     return out;
   }
   const end = clauseBoundary(tokens, fromIdx);
-  readFrom(tokens.slice(fromIdx + 1, end), out, notes);
+  readFrom(tokens.slice(fromIdx + 1, end), out, notes, ctx);
 
   const whereIdx = indexOfWord(tokens, "where", fromIdx, 0);
   if (whereIdx !== -1) {
     const whereEnd = findNextClause(tokens, whereIdx, tokens.length);
     out.whereText = tokensToString(tokens.slice(whereIdx + 1, whereEnd));
-    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes);
+    readWhere(tokens.slice(whereIdx + 1, whereEnd), out, notes, ctx);
   }
   const orderIdx = findTwoWord(tokens, "order", "by");
   if (orderIdx !== -1) {
@@ -412,7 +491,7 @@ const JOIN_PARTICLES = new Set([
  * Comma lists and join chains can nest in either order, so this is a single
  * forward scan rather than a split-then-classify pass.
  */
-function readFrom(tokens: Token[], out: Partial, notes: string[]): void {
+function readFrom(tokens: Token[], out: Partial, notes: string[], ctx: ParseCtx): void {
   let pos = 0;
   let role = "FROM";
   const particles: string[] = [];
@@ -462,7 +541,7 @@ function readFrom(tokens: Token[], out: Partial, notes: string[]): void {
         pos += 1;
       }
       for (const pred of splitOnAnd(tokens.slice(condStart, pos))) {
-        out.columns.push(...classifyPredicate(pred, "join-on", notes));
+        out.columns.push(...classifyPredicate(pred, "join-on", notes, ctx));
       }
       continue;
     }
@@ -487,7 +566,11 @@ function readFrom(tokens: Token[], out: Partial, notes: string[]): void {
 
 function pushTable(tokens: Token[], role: string, out: Partial, notes: string[]): void {
   if (tokens[0]?.value === "(") {
-    notes.push("FROM 子查询未展开，只分析外层条件");
+    // The body itself is analysed — `parseSqlAll` hands every `( SELECT ... )` to
+    // the parser as its own statement. What is lost is the *outer* filter on the
+    // alias (`WHERE d.total > 10`), which names no physical table at all, so the
+    // reader is told which half of the statement still has no verdict.
+    notes.push("FROM 子查询已按独立语句分析；外层针对派生表别名的过滤条件无法对应到物理表，未参与判定");
     return;
   }
   const table = parseTableRef(tokens, role);
@@ -575,14 +658,14 @@ function stripTrailingAlias(tokens: Token[], out: Partial): Token[] {
 
 // --- WHERE -------------------------------------------------------------------
 
-function readWhere(tokens: Token[], out: Partial, notes: string[]): void {
+function readWhere(tokens: Token[], out: Partial, notes: string[], ctx: ParseCtx): void {
   if (tokens.length === 0) return;
   const orIdx = indexOfWord(tokens, "or", 0, 0);
   if (orIdx !== -1) {
     notes.push("WHERE 含顶层 OR，索引建议按最左前缀交集保守处理");
   }
   for (const pred of splitOnAnd(tokens)) {
-    out.columns.push(...classifyPredicate(pred, "where", notes));
+    out.columns.push(...classifyPredicate(pred, "where", notes, ctx));
   }
 }
 
@@ -606,8 +689,13 @@ function unwrapConditionGroup(tokens: Token[]): Token[] | undefined {
  * access path at all. Fold the first, and mark the rest as OR branches so the
  * rules can say what actually helps instead of proposing an unusable index.
  */
-function classifyOr(branches: Token[][], scope: "where" | "join-on", notes: string[]): ColumnRef[] {
-  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes)).filter((g) => g.length > 0);
+function classifyOr(
+  branches: Token[][],
+  scope: "where" | "join-on",
+  notes: string[],
+  ctx: ParseCtx,
+): ColumnRef[] {
+  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes, ctx)).filter((g) => g.length > 0);
   if (perBranch.length === 0) return [];
   const oneColumnPerBranch = perBranch.every((g) => g.length === 1);
   const columns = perBranch.map((g) => g[0]!.column);
@@ -630,6 +718,7 @@ function classifyPredicate(
   pred: Token[],
   scope: "where" | "join-on",
   notes: string[],
+  ctx: ParseCtx,
 ): ColumnRef[] {
   if (pred.length === 0) return [];
 
@@ -645,9 +734,9 @@ function classifyPredicate(
     // a conjunction, and `(a = 1 OR a = 2)` is an IN list.
     const andGroups = splitOnAnd(unwrapped);
     if (andGroups.length > 1) {
-      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes));
+      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes, ctx));
     }
-    return classifyPredicate(unwrapped, scope, notes);
+    return classifyPredicate(unwrapped, scope, notes, ctx);
   }
 
   // An OR group is not one access path, so it has to be resolved before the
@@ -655,7 +744,7 @@ function classifyPredicate(
   // swallowed into the value, which produced error-severity advice for an index
   // the optimizer can only use via index merge on both sides.
   const orBranches = splitOnWord(pred, "or");
-  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes);
+  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes, ctx);
 
   const operator = detectOperator(pred);
   if (!operator) {
@@ -681,9 +770,15 @@ function classifyPredicate(
 
   switch (operator.kind) {
     case "eq": {
-      // `a.col = b.col` constrains both sides, so both are index candidates.
+      // `a.col = b.col` constrains both sides, so both are index candidates —
+      // except inside a subquery, where the right side may be the *outer* query's
+      // column. An unqualified name resolves inner-first, so `WHERE child_id =
+      // parent_id` can compare against something this table does not have, and an
+      // index on it would be DDL that fails to run. A qualified name needs no
+      // special case: `resolveTable` already drops a qualifier never joined.
       const rightRef = columnFromTokens(right, baseScope);
-      if (rightRef && !isWord(right[0], "null")) {
+      const outerColumn = ctx.subquery && !rightRef?.table;
+      if (rightRef && !isWord(right[0], "null") && !outerColumn) {
         rightRef.op = operator.text;
         rightRef.predicateText = tokensToString(pred);
         rightRef.valueText = leftRef.raw;
@@ -697,15 +792,11 @@ function classifyPredicate(
       break;
     }
     case "in": {
-      if (right.some((t) => isWord(t, "select"))) {
-        leftRef.op = "in-subquery";
-        // The tables inside an IN subquery are never registered, so an un-indexed
-        // join column behind `IN (SELECT role_id FROM upms_user_role WHERE ...)`
-        // gets no advice. Analysing the inner statement here would mean parsing it
-        // as its own query, which is a bigger change than saying so; until then the
-        // silence has a reason attached.
-        notes.push(`IN 子查询内的表未参与判定（只分析外层）：${truncate(tokensToString(right))}`);
-      }
+      // `IN (SELECT ...)` used to be a note about the tables behind it. They are
+      // records of their own now (`parseSqlAll`), so the only thing left to say
+      // here is that the list has no static bound — which is what `in-subquery`
+      // already means to the rules: equality prefix, never a range.
+      if (right.some((t) => isWord(t, "select"))) leftRef.op = "in-subquery";
       break;
     }
     default:

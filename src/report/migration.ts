@@ -1,4 +1,5 @@
 import type { AnalysisResult } from "../rules/engine.js";
+import { skippedCover } from "../rules/engine.js";
 import type { Finding } from "../core/types.js";
 import { ruleById } from "../rules/registry.js";
 import { evidence } from "../parsers/fingerprint.js";
@@ -79,7 +80,7 @@ export function renderMigration(
     ...(result.skipped.length > 0
       ? [
           `-- ! ${lang === "en" ? "not evaluated" : "未参与判定"}: ${result.skipped
-            .map((s) => `${s.id} (${lang === "en" ? s.reasonEn : s.reason})`)
+            .map((s) => `${s.id} (${skippedCover(s, result.records, lang, lang === "en" ? s.reasonEn : s.reason)})`)
             .join(", ")}`,
         ]
       : []),

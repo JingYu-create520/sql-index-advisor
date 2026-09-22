@@ -10,6 +10,7 @@ import type { InputNote, QueryRecord } from "./types.js";
 
 export type { InputNote };
 import { parseSql, splitStatements } from "../parsers/sql.js";
+import { withSubqueryRecords } from "./subqueries.js";
 import { parseSlowLog } from "../parsers/slowlog.js";
 import { discoverMapperFiles, loadMapperFiles, mapperStatementsToRecords } from "../parsers/mapper.js";
 
@@ -51,8 +52,6 @@ export interface LoadedInput {
  */
 const REASON_PREFIX_EN: Array<[string, string]> = [
   ["无法识别的谓词已跳过", "unrecognised predicate skipped"],
-  ["IN 子查询内的表未参与判定", "tables inside the IN subquery took part in no rule"],
-  ["（只分析外层）", " (outer statement only)"],
   ["，已跳过", ", skipped"],
   ["未找到片段", "fragment not found"],
   ["动态分支组合超过", "dynamic branch combinations exceeded"],
@@ -62,10 +61,23 @@ const REASON_PREFIX_EN: Array<[string, string]> = [
   ["WHERE 含顶层 OR", "WHERE contains a top-level OR"],
   ["条语句", "statement(s)"],
   ["include refid", "include refid"],
+  ["UNION 只分析第一个分支", "only the first UNION branch is analysed"],
+  ["（带括号的分支会按独立语句分析）", " (a bracketed branch is analysed as a statement of its own)"],
+  ["不支持的语句类型", "unsupported statement type"],
+  ["（支持 ", " (supported: "],
+  ["无括号的后续分支未参与判定", "later unbracketed branches took no rule"],
+  // A derived table is analysed as its own statement now; what is left out is the
+  // outer filter on its alias, so the translation has to carry that distinction.
+  ["FROM 子查询已按独立语句分析", "the FROM subquery is analysed as a statement of its own"],
+  ["；外层针对派生表别名的过滤条件", "; but an outer filter on the derived table's alias "],
+  ["无法对应到物理表", "cannot be mapped to a physical table"],
+  ["未参与判定", "and took no rule"],
   // Punctuation last: a note is easier to read in the English report when the
   // full-width colon and comma inside it are normalised too.
   ["：", ": "],
+  ["；", "; "],
   ["，", ", "],
+  ["）", ")"],
 ];
 
 function englishReason(reason: string): string {
@@ -100,11 +112,16 @@ export function loadInput(
   if (options.inline || (!options.kind && !existsSync(source))) {
     // One record per statement: `analyze_sql` documents `;` as a separator, so a
     // multi-statement call must not be analysed as a single query.
-    const records: QueryRecord[] = splitStatements(source).map((sql) => {
+    const outer: QueryRecord[] = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql" as const, occurrences: 1 };
     });
+    // Subqueries become records of their own first, so a caveat they produce is
+    // reported alongside the statement they came from.
+    const records = withSubqueryRecords(outer);
+    for (const record of records) {
+      if (record.parsed.notes.length > 0) notes.push(...record.parsed.notes.map(parseNote));
+    }
     return { kind: "sql", notes, records };
   }
 
@@ -207,7 +224,7 @@ export function buildRecordsFromSqlText(text: string, file?: string): QueryRecor
     line += 1;
   }
   flush();
-  return records;
+  return withSubqueryRecords(records);
 }
 
 export function readTextFile(path: string): string {

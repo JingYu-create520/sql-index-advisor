@@ -260,6 +260,33 @@ describe("exit codes (DESIGN-NOTES D6)", () => {
  * reviewed nothing, the other into SQL somebody runs without knowing which rules
  * never saw their queries.
  */
+describe("a rule skipped on part of the run says how much", () => {
+  // This is the shape a `WITH` statement produces now: the outer query names no
+  // table the parser can resolve, while a body lifted out of it does. Before the
+  // count was published, the footer listed SIA001 as "not evaluated" in the same
+  // screenful as the suggestion SIA001 had just produced.
+  const partial = () => analyze([record("SELECT 1"), record("SELECT id FROM orders WHERE user_id = 1")]);
+
+  it("the terminal footer counts the statements a skip covers", () => {
+    const text = stripAnsi(renderTerminal(partial(), { lang: "en" }));
+    expect(text).toContain("no table could be identified, on 1 of 2 statements");
+    // A skip that really does cover the whole run keeps its plain wording.
+    expect(text).toContain("needs --schema to know existing indexes");
+    expect(text).not.toContain("needs --schema to know existing indexes, on");
+  });
+
+  it("the Chinese footer carries the same numbers", () => {
+    const text = stripAnsi(renderTerminal(partial()));
+    expect(text).toContain("没有识别到表名，2 条中的 1 条");
+  });
+
+  it("the CI annotation and the migration header count too", () => {
+    expect(renderGithub(partial(), "en")).toContain("SIA001 (no table could be identified, on 1 of 2 statements)");
+    const sql = renderMigration(partial(), "fuzz.sql", { lang: "en" });
+    expect(sql).toContain("on 1 of 2 statements");
+  });
+});
+
 describe("caveats reach every output format", () => {
   const caveats = {
     notes: [{ note: "没有找到 mapper 文件", noteEn: "No mapper files found" }],

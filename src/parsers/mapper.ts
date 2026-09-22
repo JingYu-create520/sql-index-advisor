@@ -18,6 +18,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { QueryRecord, StatementKind } from "../core/types.js";
+import { withSubqueryRecords } from "../core/subqueries.js";
 import { parseSql } from "./sql.js";
 
 export interface MapperVariant {
@@ -391,5 +392,5 @@ export function mapperStatementsToRecords(statements: MapperStatement[]): QueryR
       });
     }
   }
-  return records;
+  return withSubqueryRecords(records);
 }

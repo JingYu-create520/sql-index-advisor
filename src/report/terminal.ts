@@ -1,6 +1,7 @@
 import pc from "picocolors";
 
 import type { AnalysisResult } from "../rules/engine.js";
+import { skippedCover } from "../rules/engine.js";
 import type { Finding, Severity } from "../core/types.js";
 import { evidence } from "../parsers/fingerprint.js";
 import { workspaceRelative } from "./github.js";
@@ -175,9 +176,13 @@ function renderFooter(result: AnalysisResult, lang: "zh" | "en"): string[] {
     const groups = new Map<string, string[]>();
     for (const skipped of result.skipped) {
       const reason = lang === "en" ? skipped.reasonEn : skipped.reason;
-      const list = groups.get(reason) ?? [];
+      // A rule skipped on part of the run did run on the rest, and saying only
+      // "not evaluated" above a suggestion the same rule just produced reads as if
+      // the suggestion itself were unverified.
+      const cover = skippedCover(skipped, result.records, lang, reason);
+      const list = groups.get(cover) ?? [];
       list.push(skipped.id);
-      groups.set(reason, list);
+      groups.set(cover, list);
     }
     for (const [reason, ids] of groups) {
       out.push(`${pc.yellow(t.skipped)} ${ids.join(", ")} · ${reason}`);

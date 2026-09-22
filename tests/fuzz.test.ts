@@ -6,7 +6,8 @@ import type { QueryRecord, Schema } from "../src/core/types.js";
 import { analyze } from "../src/rules/engine.js";
 import { parseSql } from "../src/parsers/sql.js";
 import { parseSlowLog } from "../src/parsers/slowlog.js";
-import { mapperStatementsToRecords, parseMapperText } from "../src/parsers/mapper.js";
+import { parseMapperText, mapperStatementsToRecords } from "../src/parsers/mapper.js";
+import { withSubqueryRecords } from "../src/core/subqueries.js";
 import { fingerprint } from "../src/parsers/fingerprint.js";
 import { validateSchema } from "../src/schema/loader.js";
 
@@ -51,6 +52,19 @@ function makeStatement(): string {
     const col = pick(COLUMNS);
     const qualified = alias && some(0.7) ? `t.${col}` : col;
     where.push(`${qualified} ${pick(OPS)}`);
+  }
+  // A correlated body of its own, because that is where the two halves of a
+  // statement used to meet: the inner table must be examined, and the outer
+  // column it correlates on must not end up in the inner index.
+  if (some(0.3)) {
+    const inner = pick(TABLES);
+    const col = pick(COLUMNS);
+    const outer = `${alias ? "t." : ""}${pick(COLUMNS)}`;
+    where.push(
+      some(0.5)
+        ? `${outer} IN (SELECT ${col} FROM ${inner} i WHERE i.${pick(COLUMNS)} = ${outer} AND i.${pick(COLUMNS)} > 1)`
+        : `EXISTS (SELECT 1 FROM ${inner} i WHERE i.${col} = ${outer} AND i.${pick(COLUMNS)} = ${some(0.5) ? "i." : ""}${pick(COLUMNS)})`,
+    );
   }
   const order = some(0.5) ? ` ORDER BY ${pick(COLUMNS)} ${pick(["ASC", "DESC"])}` : "";
   const group = some(0.25) ? ` GROUP BY ${pick(COLUMNS)}` : "";
@@ -160,6 +174,11 @@ function toRecord(sql: string, i: number): QueryRecord {
   };
 }
 
+/** The same, with the subquery bodies inside it lifted out — what the pipeline runs. */
+function toRecords(sql: string, i: number): QueryRecord[] {
+  return withSubqueryRecords([toRecord(sql, i)]);
+}
+
 const DDL_SHAPE =
   /^ALTER TABLE `[^`]+` ADD (UNIQUE )?INDEX `[^`]+` \(`[^`]+`(?:\(\d+\))?(?:, `[^`]+`(?:\(\d+\))?)*\);$/;
 
@@ -175,7 +194,7 @@ describe("fuzz: the pipeline never dies", () => {
 
   it("runs every rule over every statement without throwing", () => {
     const schema = makeSchema();
-    const records = statements.map(toRecord);
+    const records = statements.flatMap(toRecords);
     expect(() => analyze(records, {})).not.toThrow();
     expect(() => analyze(records, { schema })).not.toThrow();
     expect(() => analyze(records, { schema, minSeverity: "error" })).not.toThrow();
@@ -193,7 +212,7 @@ describe("fuzz: emitted advice obeys its own contract", () => {
   const schema = makeSchema();
   // Built once: the generator is stateful, so a second call would differ.
   const statements = corpus(1200);
-  const result = analyze(statements.map(toRecord), { schema });
+  const result = analyze(statements.flatMap(toRecords), { schema });
 
   it("only ever emits ADD INDEX as executable DDL", () => {
     const ddls = result.findings.flatMap((f) => f.suggestedDDL);
@@ -215,7 +234,7 @@ describe("fuzz: emitted advice obeys its own contract", () => {
     let fromQuery = 0;
     let fromSchema = 0;
     for (const [i, sql] of statements.entries()) {
-      const findings = analyze([toRecord(sql, i)], { schema }).findings;
+      const findings = analyze(toRecords(sql, i), { schema }).findings;
       for (const f of findings) {
         const cols = f.indexColumns ?? [];
         if (cols.length === 0) continue;
@@ -241,6 +260,20 @@ describe("fuzz: emitted advice obeys its own contract", () => {
     // Non-vacuous: both guards above must have run on real advice.
     expect(fromQuery).toBeGreaterThan(50);
     expect(fromSchema).toBeGreaterThan(50);
+  });
+
+  it("never advises a table that no statement named", () => {
+    // Subqueries are parsed as their own statements now, so a derived table's
+    // alias (`FROM (SELECT ...) d`) is one step from being mistaken for a
+    // physical table — and `ALTER TABLE d` is the kind of wrong output that gets
+    // run by somebody who trusts the tool.
+    const named = new Set(
+      statements.flatMap(toRecords).flatMap((r) => r.parsed.tables.map((t) => t.name.toLowerCase())),
+    );
+    for (const f of result.findings) {
+      if (f.suggestedDDL.length === 0) continue;
+      expect(named, `${f.table} was never a table in the run`).toContain(f.table!.toLowerCase());
+    }
   });
 
   it("never proposes two indexes where one already covers the other", () => {
@@ -289,8 +322,8 @@ describe("fuzz: determinism, which is the actual product claim", () => {
 
   it("the same input analysed twice is byte-identical", () => {
     const schema = makeSchema();
-    const a = analyze(statements.map(toRecord), { schema });
-    const b = analyze(statements.map(toRecord), { schema });
+    const a = analyze(statements.flatMap(toRecords), { schema });
+    const b = analyze(statements.flatMap(toRecords), { schema });
     expect(JSON.stringify(a.findings)).toBe(JSON.stringify(b.findings));
     expect(JSON.stringify(a.skipped)).toBe(JSON.stringify(b.skipped));
   });

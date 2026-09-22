@@ -7,6 +7,7 @@
  */
 
 import type { QueryRecord, QueryMetrics } from "../core/types.js";
+import { withSubqueryRecords } from "../core/subqueries.js";
 import { fingerprint } from "./fingerprint.js";
 import { parseSql } from "./sql.js";
 
@@ -173,8 +174,8 @@ function aggregate(events: Event[], file: string, ignoredEvents: number): SlowLo
     });
   }
 
-  const records = [...byFingerprint.values()].sort(
-    (a, b) => (b.totalQueryTime ?? 0) - (a.totalQueryTime ?? 0),
+  const records = withSubqueryRecords(
+    [...byFingerprint.values()].sort((a, b) => (b.totalQueryTime ?? 0) - (a.totalQueryTime ?? 0)),
   );
 
   return { records, ignoredEvents, totalEvents };
