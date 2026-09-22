@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.11 — 2026-09-22
+
+### Fixed
+
+- **The two formats that matter most in CI still swallowed the caveats.** 0.1.10
+  threaded loader notes through the terminal, JSON and MCP outputs, but not
+  `--format github` or `--emit-sql`, which are exactly what the Action and a DBA
+  consume. A workflow pointed at the wrong directory emitted zero workflow
+  commands, so the check went green having reviewed nothing; a migration file read
+  as a complete list with no statement of which rules never saw the queries. Both
+  now carry the notes, plus one line naming the rules that stayed silent and why
+  (`not evaluated: SIA002 (needs --schema …), …`), and the migration comments can
+  never be mistaken for executable statements.
+
 ## 0.1.10 — 2026-09-22
 
 ### Fixed

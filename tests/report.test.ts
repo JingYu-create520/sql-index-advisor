@@ -253,3 +253,39 @@ describe("exit codes (DESIGN-NOTES D6)", () => {
     expect(exitCodeFor(withSeverity("warn"), "warn")).toBe(EXIT_FINDINGS);
   });
 });
+
+/**
+ * The GitHub Action and the migration file are the two surfaces where an
+ * unexplained silence does the most damage: one turns into a green check that
+ * reviewed nothing, the other into SQL somebody runs without knowing which rules
+ * never saw their queries.
+ */
+describe("caveats reach every output format", () => {
+  const caveats = {
+    notes: [{ note: "没有找到 mapper 文件", noteEn: "No mapper files found" }],
+  };
+
+  it("an empty CI run still emits a workflow command", () => {
+    const out = renderGithub({ ...analyze([]), ...caveats }, "en");
+    expect(out).toContain("::notice");
+    expect(out).toContain("No mapper files found");
+    // and the same run without a note stays empty, so the check is meaningful
+    expect(renderGithub(analyze([]), "en")).toBe("");
+  });
+
+  it("the CI run names the rules that could not be evaluated", () => {
+    const out = renderGithub(analyze([record("SELECT id FROM orders WHERE user_id = 1")]), "en");
+    expect(out).toMatch(/::notice title=sql-index-advisor::not evaluated: SIA00[0-9]/);
+    expect(out).toContain("needs --schema");
+  });
+
+  it("the migration file states what it does not cover", () => {
+    const result = { ...analyze([record("SELECT id FROM orders WHERE shop_id = 1")]), ...caveats };
+    const sql = renderMigration(result, "mapper dir", { lang: "en" });
+    expect(sql).toContain("-- ! No mapper files found");
+    expect(sql).toContain("-- ! not evaluated:");
+    // comments must never be mistaken for executable statements
+    const executable = sql.split("\n").filter((l) => l.trim() && !l.trim().startsWith("--"));
+    for (const line of executable) expect(line).toMatch(/^ALTER TABLE .+ ADD (UNIQUE )?INDEX/);
+  });
+});

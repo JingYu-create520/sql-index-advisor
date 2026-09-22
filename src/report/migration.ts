@@ -69,6 +69,20 @@ export function renderMigration(
     "--",
     t.header,
     t.hint,
+    /**
+     * Whoever runs this file must be able to see what the file does not cover.
+     * A migration generated from a directory of runtime-built predicates, or
+     * without a schema, looks complete otherwise: it is a list of statements with
+     * nothing saying "these other rules never got a look at your queries".
+     */
+    ...result.notes.map((note) => `-- ! ${lang === "en" ? note.noteEn : note.note}`),
+    ...(result.skipped.length > 0
+      ? [
+          `-- ! ${lang === "en" ? "not evaluated" : "未参与判定"}: ${result.skipped
+            .map((s) => `${s.id} (${lang === "en" ? s.reasonEn : s.reason})`)
+            .join(", ")}`,
+        ]
+      : []),
     "",
   ];
 

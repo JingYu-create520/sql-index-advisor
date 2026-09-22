@@ -44,6 +44,26 @@ export function renderGithub(result: AnalysisResult, lang: "zh" | "en" = "en"): 
   for (const error of result.errors) {
     lines.push(`::notice title=sql-index-advisor::${escapeData(`rule error: ${error}`)}`);
   }
+  /**
+   * This is the format the GitHub Action consumes, so it is the format where an
+   * unexplained silence hurts most: a wrong `path` input or a project whose
+   * predicates are all built at runtime would otherwise produce no workflow
+   * commands at all, and the check would go green having said nothing. One
+   * annotation per note, plus one summarising the rules that stayed silent.
+   */
+  for (const note of result.notes) {
+    lines.push(`::notice title=sql-index-advisor::${escapeData(lang === "en" ? note.noteEn : note.note)}`);
+  }
+  if (result.skipped.length > 0) {
+    const detail = result.skipped
+      .map((s) => `${s.id} (${lang === "en" ? s.reasonEn : s.reason})`)
+      .join(", ");
+    lines.push(
+      `::notice title=sql-index-advisor::${escapeData(
+        `${lang === "en" ? "not evaluated" : "未参与判定"}: ${detail}`,
+      )}`,
+    );
+  }
   return `${lines.join("\n")}${lines.length ? "\n" : ""}`;
 }
 

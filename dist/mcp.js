@@ -23627,6 +23627,16 @@ function renderMigration(result, source, options = {}) {
     "--",
     t.header,
     t.hint,
+    /**
+     * Whoever runs this file must be able to see what the file does not cover.
+     * A migration generated from a directory of runtime-built predicates, or
+     * without a schema, looks complete otherwise: it is a list of statements with
+     * nothing saying "these other rules never got a look at your queries".
+     */
+    ...result.notes.map((note) => `-- ! ${lang === "en" ? note.noteEn : note.note}`),
+    ...result.skipped.length > 0 ? [
+      `-- ! ${lang === "en" ? "not evaluated" : "\u672A\u53C2\u4E0E\u5224\u5B9A"}: ${result.skipped.map((s) => `${s.id} (${lang === "en" ? s.reasonEn : s.reason})`).join(", ")}`
+    ] : [],
     ""
   ];
   for (const [table, entries] of [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
