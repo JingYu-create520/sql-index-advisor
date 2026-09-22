@@ -24,7 +24,9 @@ jobs:
       # Line-level comments: scan the mapper directory and emit the result as
       # ::warning file=...,line=... annotations.
       # fail-on: off => advisory only, does not redden the build; change to error for a gate.
+      # The Action runs the bundle it ships, so nothing has to be installed first.
       - name: Index review
+        id: index-review
         uses: JingYu-create520/sql-index-advisor@v0
         with:
           path: src/main/resources/mapper
@@ -41,9 +43,10 @@ jobs:
           path: sia-report.json
           if-no-files-found: ignore
 
-      # Optional: hand the DBA a reviewable migration file directly.
+      # Optional: hand the DBA a reviewable migration file, using the same CLI the
+      # Action ran (its `cli` output), so this step cannot drift to another version.
       - name: Emit migration SQL
         run: |
-          sia src/main/resources/mapper \
+          ${{ steps.index-review.outputs.cli }} src/main/resources/mapper \
             --emit-sql sia-migrations.sql --format json > /dev/null || true
           cat sia-migrations.sql || true

@@ -36,24 +36,46 @@ inputs:
     required: false
     default: ""
   cli:
-    description: "CLI command to run. Default installs `sia` from GitHub in this job."
+    description: "Command to run the CLI with. Empty uses the bundle shipped in this repository, so no install step is needed."
     required: false
-    default: "sia"
+    default: ""
 
 outputs:
   report-file:
     description: "Path to the JSON report artifact written into the workspace"
     value: ${{ steps.report.outputs.report-file }}
+  cli:
+    description: "The command that runs the CLI in this job, for a later step that wants a second look at the same input"
+    value: ${{ steps.cli.outputs.bin }}
 
 runs:
   using: "composite"
   steps:
-    - name: "Install sql-index-advisor"
-      # Skipped when the caller supplies its own `cli`, so a fork or a local
-      # build stays usable without going through npm.
-      if: ${{ inputs.cli == 'sia' }}
+    - name: "Resolve the CLI"
+      id: "cli"
+      # Running the committed dist/cli.js is the default on purpose. The earlier
+      # design installed the package globally with `npm i -g github:…` and then
+      # called `sia`; on a GitHub runner that install produced nothing on PATH
+      # ("sia: command not found", exit 127) while the step that consumed it kept
+      # `continue-on-error`, so the check still reported green. No install, no
+      # PATH, no npm tar-extraction surprises: the action ships its own bundle.
       shell: bash
-      run: npm i -g github:JingYu-create520/sql-index-advisor
+      env:
+        OVERRIDE: ${{ inputs.cli }}
+      run: |
+        set -euo pipefail
+        if [ -n "${OVERRIDE}" ]; then
+          echo "bin=${OVERRIDE}" >> "$GITHUB_OUTPUT"
+          echo "Using the CLI supplied by the caller."
+        else
+          entry="${GITHUB_ACTION_PATH}/dist/cli.js"
+          if [ ! -f "${entry}" ]; then
+            echo "::error::${entry} is missing. Pin a tag from 0.1.6 or later, or pass the cli input."
+            exit 1
+          fi
+          echo "bin=node ${entry}" >> "$GITHUB_OUTPUT"
+          node "${entry}" --version
+        fi
 
     - name: "Collect input (guards against injecting user text into the shell)"
       id: "config"
@@ -67,33 +89,39 @@ runs:
 
     - name: "Annotate findings"
       id: "report"
-      # The annotation step must never break a build on its own: adoption first.
-      continue-on-error: true
+      shell: bash
       env:
+        CLI: ${{ steps.cli.outputs.bin }}
         PATH_ARG: ${{ inputs.path }}
         SCHEMA_FLAG: ${{ steps.config.outputs.schema-flag }}
         MIN_SEVERITY: ${{ inputs.min-severity }}
         MYSQL_VERSION: ${{ inputs.mysql-version }}
         TOP: ${{ inputs.top }}
         EXTRA_ARGS: ${{ inputs.args }}
-        CLI: ${{ inputs.cli }}
-      shell: bash
       run: |
-        set -o pipefail
+        set +e
+        # Findings must not break a build here: the job below decides that. A
+        # non-zero exit larger than 1 means the tool itself never ran, and that is
+        # a broken review, not a clean bill of health, so it has to be loud.
         ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
           --format github \
           --min-severity "${MIN_SEVERITY}" \
           --mysql-version "${MYSQL_VERSION}" \
           --top "${TOP}" \
           ${EXTRA_ARGS} | tee sia-annotations.txt
+        code=${PIPESTATUS[0]}
+        if [ "${code}" -gt 1 ]; then
+          echo "::error::sql-index-advisor failed to run (exit ${code}). Check the path and schema inputs; the annotations below, if any, are incomplete."
+          exit 1
+        fi
+        set -e
 
         ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
           --format json \
           --min-severity "${MIN_SEVERITY}" \
           --mysql-version "${MYSQL_VERSION}" \
           --top "${TOP}" \
-          ${EXTRA_ARGS} > sia-report.json || true
-
+          ${EXTRA_ARGS} > sia-report.json
         echo "report-file=sia-report.json" >> "$GITHUB_OUTPUT"
 
         {
@@ -109,12 +137,12 @@ runs:
     - name: "Fail the job (only when fail-on is set)"
       if: ${{ inputs.fail-on != 'off' }}
       env:
+        CLI: ${{ steps.cli.outputs.bin }}
         PATH_ARG: ${{ inputs.path }}
         SCHEMA_FLAG: ${{ steps.config.outputs.schema-flag }}
         FAIL_ON: ${{ inputs.fail-on }}
         MYSQL_VERSION: ${{ inputs.mysql-version }}
         EXTRA_ARGS: ${{ inputs.args }}
-        CLI: ${{ inputs.cli }}
       shell: bash
       run: |
         # Actions runs `run:` blocks under `bash -e`, so a non-zero exit would
