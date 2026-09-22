@@ -89,6 +89,33 @@ export const sia004: Rule = {
             .join(" "),
         });
       }
+
+      /**
+       * A `LIKE '%x%'` cannot narrow a B-tree seek at all, and the honest answer is
+       * not silence. Without this branch the report says "nothing to report" over a
+       * guaranteed full scan, which is the one failure mode this tool promises it
+       * will not commit; silence has to be attributable. No DDL is offered, because
+       * no index helps this predicate.
+       */
+      for (const ref of dedupe(bucket.range.filter((r) => r.op === "like-middle"))) {
+        const shown = ref.predicateText ?? `${ref.raw} LIKE ...`;
+        findings.push({
+          rule: RULE_ID,
+          severity: "info",
+          sql: truncateSql(record.parsed.sql),
+          fingerprint: record.fingerprint,
+          source: record.source,
+          queryTime: record.metrics?.queryTime,
+          rowsExamined: record.metrics?.rowsExamined,
+          occurrences: record.occurrences,
+          needsSchema: false,
+          needsMetrics: false,
+          table: bucket.table,
+          suggestedDDL: [],
+          message: `条件 ${shown} 的 LIKE 模式以 % 开头，B+ 树索引对它无能为力：既不能定位也不能缩小范围，只能在别的条件把行筛出来之后逐行比对。所以本条不给 DDL。出路只有三条：改成右锚定 LIKE（'abc%' 可以命中索引）、给该列建全文索引用 MATCH AGAINST、或者由调用方强制要求前缀长度。`,
+          messageEn: `Predicate ${shown} uses a LIKE pattern that starts with %, which no B-tree index can use to seek or narrow: the rows have to arrive for some other reason before the pattern is checked. Hence no DDL here. The three ways out are a right-anchored LIKE ('abc%', indexable), a fulltext index with MATCH AGAINST, or requiring a leading prefix from the caller.`,
+        });
+      }
     }
 
     return findings;

@@ -78,12 +78,33 @@ describe("SIA004 function or expression on an indexed column", () => {
     expect(finding?.messageEn).toContain("MySQL 8.0 can index the expression");
   });
 
+  /**
+   * A leading-wildcard LIKE used to produce an empty report. The rule exists so
+   * that silence is always attributable to something: here the honest answer is
+   * "no index can help this predicate", not "nothing to report".
+   */
+  it("a LIKE that starts with % is reported, with no DDL, in both languages", () => {
+    const findings = runRule(sia004, "SELECT id FROM orders WHERE remark LIKE '%abc%'", {
+      schema: TEST_SCHEMA,
+    });
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("info");
+    expect(finding.suggestedDDL).toEqual([]);
+    expect(finding.message).toContain("全文索引");
+    expect(finding.messageEn).toContain("fulltext index");
+    expect(finding.messageEn).toContain("no B-tree index");
+  });
+
+  it("positive: a right-anchored LIKE is indexable and stays quiet here", () => {
+    expect(runRule(sia004, "SELECT id FROM orders WHERE remark LIKE 'abc%'", { schema: TEST_SCHEMA })).toEqual([]);
+  });
+
   it("negative: a bare column predicate is fine", () => {
     expect(runRule(sia004, "SELECT id FROM orders WHERE create_time = '2026-09-17'", {
       schema: TEST_SCHEMA,
     })).toEqual([]);
   });
-
   it("negative: aggregate projection is not a predicate", () => {
     expect(runRule(sia004, "SELECT COUNT(*) FROM orders WHERE user_id = 1", { schema: TEST_SCHEMA })).toEqual(
       [],
