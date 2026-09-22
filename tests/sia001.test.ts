@@ -72,8 +72,34 @@ describe("SIA001 missing index candidate", () => {
     expect(finding.messageEn).not.toMatch(/no existing index serves/i);
   });
 
-  it("negative: primary key lookup needs no new index", () => {    expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10", { schema: TEST_SCHEMA })).toEqual([]);
+  it("negative: primary key lookup needs no new index", () => {
+    expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10", { schema: TEST_SCHEMA })).toEqual([]);
     expect(runRule(sia001, "SELECT * FROM orders WHERE id = 10")).toEqual([]);
+  });
+
+  /**
+   * From a real project (macrozheng/mall, OmsOrderDao.delivery): a batch update
+   * whose WHERE is `id IN ( ? ) AND status = 1` used to be answered with
+   * `(status, id)`. The engine reads the primary key for that list either way, so
+   * the proposal was a second structure nobody would choose.
+   */
+  it("negative: a primary key IN list is already the access path", () => {
+    expect(
+      runRule(sia001, "UPDATE orders SET remark = 'x' WHERE id IN (1, 2, 3) AND status = 'PAID'", {
+        schema: TEST_SCHEMA,
+      }),
+    ).toEqual([]);
+  });
+
+  it("positive: an IN list on a non-key column is still a real candidate", () => {
+    const findings = runRule(
+      sia001,
+      "SELECT id FROM order_item WHERE order_id = 5 AND sku_id IN (1, 2, 3)",
+      { schema: TEST_SCHEMA },
+    );
+    expect(ddls(findings)).toEqual([
+      "ALTER TABLE `order_item` ADD INDEX `idx_order_item_order_id_sku_id` (`order_id`, `sku_id`);",
+    ]);
   });
 
   it("negative: an existing index already covers the equality prefix", () => {

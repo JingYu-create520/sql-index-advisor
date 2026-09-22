@@ -55,6 +55,10 @@ export const sia001: Rule = {
       // A unique single-column equality already resolves to <=1 row; extra
       // predicates need no index, and suggesting one is pure noise.
       if (resolvesByUniqueLookup(table, bucket)) continue;
+      // Same argument for a primary key hit with an IN list: the engine is doing
+      // a bounded set of PK dives, and whatever else is in the WHERE is a filter
+      // on rows it already has.
+      if (resolvesByPrimaryKeyIn(table, bucket)) continue;
       // A gap inside an existing composite index is SIA003's call, not a new index.
       if (equalityAlreadyIndexed(table, bucket)) continue;
 
@@ -177,6 +181,28 @@ function resolvesByUniqueLookup(
       index.columns.length === 1 &&
       equality.includes(index.columns[0]!),
   );
+}
+
+/**
+ * A `WHERE id IN (1, 2, 3)` against a single-column primary key is a bounded set
+ * of PK dives, and every other predicate in that WHERE is a filter on rows the
+ * engine already holds. Proposing `(status, id)` for one of those is not a
+ * different plan, it is a second structure that the optimizer will not prefer,
+ * so it costs writes and never gets read. Found on a real project (macrozheng/mall,
+ * `OmsOrderDao.delivery`): `WHERE id IN ( ? ) AND status = 1` produced exactly that.
+ *
+ * `IN (subquery)` is deliberately excluded: there the list has no static bound,
+ * and a secondary index can genuinely win.
+ */
+function resolvesByPrimaryKeyIn(
+  table: SchemaTable | undefined,
+  bucket: TableBucket,
+): boolean {
+  if (!table) return false;
+  const pk = table.indexes.find((i) => i.primary);
+  if (!pk || pk.columns.length !== 1) return false;
+  const pkColumn = pk.columns[0]!;
+  return bucket.inList.some((ref) => ref.column === pkColumn && (ref.op ?? "in") === "in");
 }
 
 /** True when some existing index already serves every equality column of this table. */
