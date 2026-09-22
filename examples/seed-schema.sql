@@ -15,6 +15,13 @@
 --
 -- Then re-run the EXPLAIN block at the bottom: `type` should stop being ALL and
 -- `key` should name the index the tool recommended.
+--
+-- MySQL 8.0 only, and this is the one example file with that requirement. The row
+-- generation uses `WITH RECURSIVE` plus `cte_max_recursion_depth`, neither of which
+-- exists on 5.7: there it fails with `ERROR 1193 Unknown system variable
+-- 'cte_max_recursion_depth'` and then `ERROR 1064 ... near 'RECURSIVE'` on every
+-- insert. The tool itself and `schema-dump.sql` work fine against 5.7; if you want
+-- the demo on 5.7, load any small schema with a couple of unindexed foreign keys.
 
 -- Must exceed the largest generated table (600k address rows).
 SET SESSION cte_max_recursion_depth = 1000000;
