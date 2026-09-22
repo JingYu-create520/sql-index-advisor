@@ -110,6 +110,12 @@ ALTER TABLE `orders` ADD INDEX `idx_orders_create_time` ((DATE(create_time)));
 
 **建过的函数索引不会被再次推荐。** 表达式型的索引键在 `information_schema.STATISTICS` 里 `COLUMN_NAME` 是 NULL，表达式正文放在 `EXPRESSION` 这一列——而 5.7 根本没有这一列，所以共用的一份 dump 读不到它。能对齐的只有名字：如果这张表上已经存在一个与本条建议同名（`idx_orders_create_time`）的索引，就只降为 `warn`、不再给 DDL，并且文案里说清"这是按名字对齐，不是证明"，让人用 `SHOW INDEX` 自己确认一次。不做这件事的代价很具体：把建议执行完之后重跑一次，同一份迁移文件里会出现两条同名 `ADD INDEX`，第二条直接 `ERROR 1061`。
 
+**只有字符串字面量能被搬成 LIKE 模式。** `LEFT(code, 3) = '123'` 可以，`LEFT(code, 3) = 123` 和 `LEFT(code, 3) = other_col` 都不行——早期实现按"两端是引号"直接切掉首尾字符，于是数字 `123` 变成 `'23'`、列名 `remark` 变成 `'emar%'`：SQL 能跑，但筛的不是同一批行。数字比较在 MySQL 里是两边转数值，根本不是前缀语义，所以正确做法是不给改写，而不是给一个看起来像的。同理，`DATE(col) = ?` 这类带 `?` 的模板只在右端确实是绑定参数时才给。
+
+**`DATE(create_time) = '2026-09-17 13:00:00'` 永远不成立。** `DATE()` 得到当天零点，MySQL 拿它和右端整个日期时间比较，字面量只要带非零时分秒就没有一行能命中（8.0.46 实测：日窗口 3 行，这条谓词 0 行）。这不是索引问题，所以本条不给 DDL、也不给改写，只说明原因并给出他大概想写的那一句：`create_time >= DATE(?) AND create_time < DATE(?) + INTERVAL 1 DAY`。
+
+上面这些性质不是推出来的，是在真服务器上比的：`node scripts/verify-rewrites.mjs` 会把这些形状逐条问一遍 MySQL "两种写法筛出的行是否完全相同"（比较主键集合而不是行数），不一致就非零退出。单元测试只能证明吐出来的文本长得对。
+
 **同一条规则还负责一种情况：以 `%` 开头的 `LIKE`。** 它不是"列上套了函数"，但它和函数一样让 B+ 树失去定位能力——既不能 seek 也不能缩小范围，只能在别的条件筛出的行上逐行比对。所以工具明确报一条 `info`、并且**不给 DDL**，因为任何索引都救不了它。真正能改的只有三条：改成右锚定 `LIKE 'abc%'`、给该列上全文索引用 `MATCH AGAINST`、或者业务侧强制要求前缀。这条存在的理由是本项目的底线：**沉默必须归因，不能被读成"没问题"**——一个必然大范围扫描的查询过去会得到 `✓ nothing to report`。
 
 ## SIA005 · 隐式类型转换 · S
@@ -178,7 +184,9 @@ interface Finding {
   messageEn: string;      // 同等信息量的英文文案（不是摘要：两条分支的警告必须两边都在）
   llmNote?: string;       // 仅 --llm 追加，不参与任何判定
   suggestedDDL: string[]; // 只有 ADD INDEX，永不出现 DROP
-  rewrite?: string;
+  rewrite?: string;       // 注意两种形态：SIA004 给的是 WHERE 片段（替换原条件用），
+                          // SIA006 给的是一条完整可执行语句。缺省=本条没有等价改写，
+                          // 只把模板写在 message 里，消费方不要自己拼语句。
   needsSchema: boolean;
   needsMetrics: boolean;
   indexColumns?: string[];      // 建议索引的列顺序；引擎据此做前缀冗余消除

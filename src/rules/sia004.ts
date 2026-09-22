@@ -40,6 +40,15 @@ export const sia004: Rule = {
       const table = findTable(schema, bucket.table);
       for (const ref of dedupe(bucket.wrapped)) {
         const rewrite = buildRewrite(ref);
+        /**
+         * `DATE(create_time) = '2026-09-17 13:00:00'` cannot be true. `DATE()`
+         * yields midnight, and MySQL compares it against the whole datetime, so the
+         * predicate matches no row on any data - measured on 8.0.46. There is no
+         * sargable rewrite that preserves "returns nothing", and no index worth
+         * building for it either, so this says what is wrong with the query instead
+         * of handing over SQL that looks like a fix.
+         */
+        const neverTrue = deadDateComparison(ref);
         const wantedName = table ? indexName(table.name, [ref.column]) : "";
         /**
          * Has this advice already been followed? A functional index reports no
@@ -57,7 +66,7 @@ export const sia004: Rule = {
           wantedName !== "" &&
           table!.indexes.some((i) => i.name.toLowerCase() === wantedName.toLowerCase());
         const functionalDdl =
-          options.mysqlVersion >= 8 && table && !alreadyNamed
+          options.mysqlVersion >= 8 && table && !alreadyNamed && !neverTrue
             ? [
                 `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(
                   indexName(table.name, [ref.column]),
@@ -67,7 +76,7 @@ export const sia004: Rule = {
 
         findings.push({
           rule: RULE_ID,
-          severity: alreadyNamed ? "warn" : rewrite ? "error" : "warn",
+          severity: alreadyNamed ? "warn" : neverTrue ? "error" : rewrite ? "error" : "warn",
           sql: truncateSql(record.parsed.sql),
           fingerprint: record.fingerprint,
           source: record.source,
@@ -78,16 +87,24 @@ export const sia004: Rule = {
           needsMetrics: false,
           table: bucket.table,
           suggestedDDL: functionalDdl,
-          rewrite: rewrite?.predicate,
+          rewrite: neverTrue ? undefined : rewrite?.predicate,
           message: [
-            alreadyNamed
-              ? `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，按原值建的索引对它无效；不过这张表上已有一个叫 ${wantedName} 的索引，而它正是本条建议会取的名字，若它索引的正是 ${ref.raw}，这个条件已经能走索引。`
-              : `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
-            rewrite ? `改写方案：${rewrite.predicate}（${rewrite.why}）` : "该表达式没有等价改写形式，可考虑函数索引。",
+            neverTrue
+              ? `条件 ${ref.predicateText ?? ref.raw} 永远不会成立：DATE() 的结果是当天零点，而 MySQL 拿它和右端整个日期时间比较，只要字面量带非零时分秒就没有一行能命中。这不是索引问题，改成 ${ref.column ?? "该列"} >= DATE('${literalDate(ref)}') AND ${ref.column ?? "该列"} < DATE('${literalDate(ref)}') + INTERVAL 1 DAY（或者右端也用 DATE(...)）才是原意。`
+              : alreadyNamed
+                ? `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，按原值建的索引对它无效；不过这张表上已有一个叫 ${wantedName} 的索引，而它正是本条建议会取的名字，若它索引的正是 ${ref.raw}，这个条件已经能走索引。`
+                : `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
+            ...(neverTrue
+              ? []
+              : [rewrite ? `改写方案：${rewrite.predicate}（${rewrite.why}）` : "该表达式没有等价改写形式，可考虑函数索引。"]),
             ...(options.mysqlVersion >= 8
-              ? [`MySQL 8.0 可用函数索引 ((${ref.raw})) 直接索引表达式结果，但查询必须写成完全相同的表达式才能命中；5.7 不支持。`]
+              ? [
+                  neverTrue
+                    ? `函数索引也救不了一条筛不出任何行的条件，所以本条不给 DDL。`
+                    : `MySQL 8.0 可用函数索引 ((${ref.raw})) 直接索引表达式结果，但查询必须写成完全相同的表达式才能命中；5.7 不支持。`,
+                ]
               : [`MySQL 5.7 不支持函数索引，只能改写查询。`]),
-            functionalDdl.length === 0 && !rewrite && !alreadyNamed
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed && !neverTrue
               ? "当前输入未提供 --schema 或版本低于 8.0，未生成 DDL。"
               : "",
             alreadyNamed
@@ -101,14 +118,25 @@ export const sia004: Rule = {
               ? `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} is not served by an index on the raw column` +
                 ` value; this table already carries an index named ${wantedName}, which is the name this advice` +
                 ` would use, so if that one indexes ${ref.raw} the predicate is served today.`
-              : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
-            rewrite
-              ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).`
-              : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
+              : neverTrue
+                ? `Predicate ${ref.predicateText ?? ref.raw} can never be true: DATE() returns midnight and MySQL` +
+                  ` compares it against the whole datetime on the right, so a literal carrying any time-of-day` +
+                  ` matches no row. What was probably meant is a day window over the bare column:` +
+                  ` ${ref.column ?? "col"} >= DATE('${literalDate(ref)}') AND ${ref.column ?? "col"} < DATE('${literalDate(ref)}') + INTERVAL 1 DAY.`
+                : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
+            ...(neverTrue
+              ? []
+              : [
+                  rewrite
+                    ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).`
+                    : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
+                ]),
             options.mysqlVersion >= 8
-              ? `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.`
+              ? neverTrue
+                ? `No index can help a predicate that selects nothing, so this finding carries no DDL.`
+                : `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.`
               : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
-            functionalDdl.length === 0 && !rewrite && !alreadyNamed
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed && !neverTrue
               ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.`
               : "",
             alreadyNamed
@@ -178,18 +206,32 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
   if (dateCall && ref.op === "=") {
     const target = dateCall[1]!;
     if (day) {
-      const next = new Date(day.getTime() + 24 * 3600 * 1000);
+      /**
+       * `DATE(col) = '2026-09-17 13:00:00'` is a comparison against the *day*
+       * 2026-09-17: MySQL drops the time from both sides. Carrying the time into
+       * the window built the range `[17th 13:00, 18th 13:00)`, which is twelve
+       * hours of the wrong day on each end - measured against a live 8.0.46, that
+       * returned rows the original query does not. So the window is anchored at
+       * midnight before anything else is computed.
+       */
+      const midnight = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+      const next = new Date(midnight.getTime() + 24 * 3600 * 1000);
       return {
-        predicate: `${target} >= '${formatDate(day)}' AND ${target} < '${formatDate(next)}'`,
-        why: "按天等值等价于左闭右开区间，可命中该列索引",
-        whyEn: "equality on one day is the same set as a half-open range over it, which the column index can serve",
+        predicate: `${target} >= '${formatDate(midnight)}' AND ${target} < '${formatDate(next)}'`,
+        why: "按天等值等价于该天左闭右开区间，可命中该列索引",
+        whyEn: "equality on one day is the same set as that calendar day as a half-open range, which the column index can serve",
       };
     }
-    return {
-      predicate: `${target} >= ? AND ${target} < DATE_ADD(?, INTERVAL 1 DAY)`,
-      why: "绑定参数为日期时同样可改写为区间；注意两个 ? 传同一个值",
-      whyEn: "a bound date parameter rewrites the same way; both ? must carry the same value",
-    };
+    // The `?` form is only honest for a value that *is* a parameter; for anything
+    // else (another column, a shape we cannot read) no rewrite beats a wrong one.
+    // DATE(?) keeps the same day-only semantics for a bound datetime.
+    return ref.parameterized
+      ? {
+          predicate: `${target} >= DATE(?) AND ${target} < DATE(?) + INTERVAL 1 DAY`,
+          why: "绑定参数为日期时同样可改写为区间；注意两个 ? 传同一个值",
+          whyEn: "a bound date parameter rewrites the same way; both ? must carry the same value",
+        }
+      : undefined;
   }
 
   const yearCall = /^YEAR\(\s*([\w.`]+)\s*\)$/i.exec(raw);
@@ -203,25 +245,37 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
         whyEn: "equality on a year is the same set as that year as a half-open range",
       };
     }
-    return {
-      predicate: `${target} >= MAKEDATE(YEAR(?), 1) AND ${target} < MAKEDATE(YEAR(?) + 1, 1)`,
-      why: "参数化场景改写为区间",
-      whyEn: "range form for the parameterised case",
-    };
+    return ref.parameterized
+      ? {
+          predicate: `${target} >= MAKEDATE(YEAR(?), 1) AND ${target} < MAKEDATE(YEAR(?) + 1, 1)`,
+          why: "参数化场景改写为区间",
+          whyEn: "range form for the parameterised case",
+        }
+      : undefined;
   }
 
   const leftCall = /^LEFT\(\s*([\w.`]+)\s*,\s*(\d+)\s*\)$/i.exec(raw);
   if (leftCall && ref.op === "=") {
     const target = leftCall[1]!;
-    if (value !== "?") {
-      const escaped = value.slice(1, -1).replace(/[%_]/g, (c) => `\\${c}`);
+    // Only a *string* literal can become a LIKE pattern. The value used to be cut
+    // with `slice(1, -1)` on the assumption that it was quoted, so
+    // `LEFT(code, 3) = 123` came out as `code LIKE '2%'` (a number has no quotes to
+    // strip, so the first digit was eaten) and `LEFT(code, 3) = other_col` came out
+    // as `code LIKE 'ode%'`. Both were silent: the rewrite runs, and it is not the
+    // same predicate. A numeric comparison is not a prefix test at all - MySQL
+    // casts both sides to a number - so it gets no rewrite.
+    const literal = stringLiteral(value);
+    if (literal !== undefined) {
+      const escaped = literal.replace(/[%_]/g, (c) => `\\${c}`);
       return {
         predicate: `${target} LIKE '${escaped}%'`,
         why: "取前缀后等值等价于前缀 LIKE，右前缀 LIKE 可用索引",
         whyEn: "comparing a fixed prefix is the same predicate as a LIKE that ends in %, and a leading-anchor LIKE is sargable",
       };
     }
-    return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "前缀匹配改写", whyEn: "prefix match rewritten as a LIKE" };
+    if (ref.parameterized) {
+      return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "前缀匹配改写", whyEn: "prefix match rewritten as a LIKE" };
+    }
   }
 
   // `col + 1 = 5` / `col * 2 > 10`: move the arithmetic to the right-hand side.
@@ -239,6 +293,47 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
   }
 
   // Still worth offering the substitution even when we cannot compute a range.
+  return undefined;
+}
+
+/**
+ * `DATE(col) = '<datetime with a time-of-day>'` matches nothing: DATE() yields
+ * midnight and the comparison is against the whole literal. Verified on MySQL
+ * 8.0.46 with rows on both sides of the boundary - the day window returns them,
+ * this predicate does not.
+ */
+function deadDateComparison(ref: ColumnRef): boolean {
+  if (ref.op !== "=") return false;
+  const call = /^DATE\(\s*[\w.`]+\s*\)$/i.exec(ref.raw ?? "");
+  if (!call) return false;
+  const literal = stringLiteral((ref.valueText ?? "").trim());
+  if (literal === undefined) return false;
+  const parsed = parseDateLiteral(literal);
+  if (!parsed) return false;
+  return parsed.getUTCHours() !== 0 || parsed.getUTCMinutes() !== 0 || parsed.getUTCSeconds() !== 0;
+}
+
+/** The date part of a literal, for the message that explains what was meant. */
+function literalDate(ref: ColumnRef): string {
+  const parsed = parseDateLiteral((ref.valueText ?? "").replace(/'/g, ""));
+  return parsed ? formatDate(parsed).slice(0, 10) : "?";
+}
+
+/**
+ * The text of a single SQL string literal, or undefined for anything else.
+ *
+ * Rewrites that embed a value into a new syntactic position (a LIKE pattern, most
+ * of all) must know it is dealing with a literal: numbers, bind parameters and
+ * column references all look like short strings in `valueText`, and treating them
+ * as quoted text corrupts the value. The inner text is returned **verbatim**, with
+ * any doubled quote still doubled - it goes straight back into a quoted literal, so
+ * unescaping it here would be what breaks the SQL.
+ */
+function stringLiteral(value: string): string | undefined {
+  const single = /^'(?:(?:'')|[^'])*'$/.exec(value);
+  if (single) return value.slice(1, -1);
+  const double = /^"(?:""|[^"])*"$/.exec(value);
+  if (double) return value.slice(1, -1).replace(/""/g, '"');
   return undefined;
 }
 

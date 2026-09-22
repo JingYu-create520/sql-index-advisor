@@ -23166,16 +23166,17 @@ var sia004 = {
       const table = findTable(schema, bucket.table);
       for (const ref of dedupe(bucket.wrapped)) {
         const rewrite = buildRewrite(ref);
+        const neverTrue = deadDateComparison(ref);
         const wantedName = table ? indexName(table.name, [ref.column]) : "";
         const alreadyNamed = wantedName !== "" && table.indexes.some((i) => i.name.toLowerCase() === wantedName.toLowerCase());
-        const functionalDdl = options.mysqlVersion >= 8 && table && !alreadyNamed ? [
+        const functionalDdl = options.mysqlVersion >= 8 && table && !alreadyNamed && !neverTrue ? [
           `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(
             indexName(table.name, [ref.column])
           )} ((${ref.raw}));`
         ] : [];
         findings.push({
           rule: RULE_ID4,
-          severity: alreadyNamed ? "warn" : rewrite ? "error" : "warn",
+          severity: alreadyNamed ? "warn" : neverTrue ? "error" : rewrite ? "error" : "warn",
           sql: truncateSql(record2.parsed.sql),
           fingerprint: record2.fingerprint,
           source: record2.source,
@@ -23186,19 +23187,23 @@ var sia004 = {
           needsMetrics: false,
           table: bucket.table,
           suggestedDDL: functionalDdl,
-          rewrite: rewrite?.predicate,
+          rewrite: neverTrue ? void 0 : rewrite?.predicate,
           message: [
-            alreadyNamed ? `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u6309\u539F\u503C\u5EFA\u7684\u7D22\u5F15\u5BF9\u5B83\u65E0\u6548\uFF1B\u4E0D\u8FC7\u8FD9\u5F20\u8868\u4E0A\u5DF2\u6709\u4E00\u4E2A\u53EB ${wantedName} \u7684\u7D22\u5F15\uFF0C\u800C\u5B83\u6B63\u662F\u672C\u6761\u5EFA\u8BAE\u4F1A\u53D6\u7684\u540D\u5B57\uFF0C\u82E5\u5B83\u7D22\u5F15\u7684\u6B63\u662F ${ref.raw}\uFF0C\u8FD9\u4E2A\u6761\u4EF6\u5DF2\u7ECF\u80FD\u8D70\u7D22\u5F15\u3002` : `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u7D22\u5F15\u91CC\u5B58\u7684\u662F\u539F\u503C\uFF0C\u56E0\u6B64\u8BE5\u5217\u4E0A\u7684\u7D22\u5F15\u5B8C\u5168\u7528\u4E0D\u4E0A\u3002`,
-            rewrite ? `\u6539\u5199\u65B9\u6848\uFF1A${rewrite.predicate}\uFF08${rewrite.why}\uFF09` : "\u8BE5\u8868\u8FBE\u5F0F\u6CA1\u6709\u7B49\u4EF7\u6539\u5199\u5F62\u5F0F\uFF0C\u53EF\u8003\u8651\u51FD\u6570\u7D22\u5F15\u3002",
-            ...options.mysqlVersion >= 8 ? [`MySQL 8.0 \u53EF\u7528\u51FD\u6570\u7D22\u5F15 ((${ref.raw})) \u76F4\u63A5\u7D22\u5F15\u8868\u8FBE\u5F0F\u7ED3\u679C\uFF0C\u4F46\u67E5\u8BE2\u5FC5\u987B\u5199\u6210\u5B8C\u5168\u76F8\u540C\u7684\u8868\u8FBE\u5F0F\u624D\u80FD\u547D\u4E2D\uFF1B5.7 \u4E0D\u652F\u6301\u3002`] : [`MySQL 5.7 \u4E0D\u652F\u6301\u51FD\u6570\u7D22\u5F15\uFF0C\u53EA\u80FD\u6539\u5199\u67E5\u8BE2\u3002`],
-            functionalDdl.length === 0 && !rewrite && !alreadyNamed ? "\u5F53\u524D\u8F93\u5165\u672A\u63D0\u4F9B --schema \u6216\u7248\u672C\u4F4E\u4E8E 8.0\uFF0C\u672A\u751F\u6210 DDL\u3002" : "",
+            neverTrue ? `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u6C38\u8FDC\u4E0D\u4F1A\u6210\u7ACB\uFF1ADATE() \u7684\u7ED3\u679C\u662F\u5F53\u5929\u96F6\u70B9\uFF0C\u800C MySQL \u62FF\u5B83\u548C\u53F3\u7AEF\u6574\u4E2A\u65E5\u671F\u65F6\u95F4\u6BD4\u8F83\uFF0C\u53EA\u8981\u5B57\u9762\u91CF\u5E26\u975E\u96F6\u65F6\u5206\u79D2\u5C31\u6CA1\u6709\u4E00\u884C\u80FD\u547D\u4E2D\u3002\u8FD9\u4E0D\u662F\u7D22\u5F15\u95EE\u9898\uFF0C\u6539\u6210 ${ref.column ?? "\u8BE5\u5217"} >= DATE('${literalDate(ref)}') AND ${ref.column ?? "\u8BE5\u5217"} < DATE('${literalDate(ref)}') + INTERVAL 1 DAY\uFF08\u6216\u8005\u53F3\u7AEF\u4E5F\u7528 DATE(...)\uFF09\u624D\u662F\u539F\u610F\u3002` : alreadyNamed ? `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u6309\u539F\u503C\u5EFA\u7684\u7D22\u5F15\u5BF9\u5B83\u65E0\u6548\uFF1B\u4E0D\u8FC7\u8FD9\u5F20\u8868\u4E0A\u5DF2\u6709\u4E00\u4E2A\u53EB ${wantedName} \u7684\u7D22\u5F15\uFF0C\u800C\u5B83\u6B63\u662F\u672C\u6761\u5EFA\u8BAE\u4F1A\u53D6\u7684\u540D\u5B57\uFF0C\u82E5\u5B83\u7D22\u5F15\u7684\u6B63\u662F ${ref.raw}\uFF0C\u8FD9\u4E2A\u6761\u4EF6\u5DF2\u7ECF\u80FD\u8D70\u7D22\u5F15\u3002` : `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u7D22\u5F15\u91CC\u5B58\u7684\u662F\u539F\u503C\uFF0C\u56E0\u6B64\u8BE5\u5217\u4E0A\u7684\u7D22\u5F15\u5B8C\u5168\u7528\u4E0D\u4E0A\u3002`,
+            ...neverTrue ? [] : [rewrite ? `\u6539\u5199\u65B9\u6848\uFF1A${rewrite.predicate}\uFF08${rewrite.why}\uFF09` : "\u8BE5\u8868\u8FBE\u5F0F\u6CA1\u6709\u7B49\u4EF7\u6539\u5199\u5F62\u5F0F\uFF0C\u53EF\u8003\u8651\u51FD\u6570\u7D22\u5F15\u3002"],
+            ...options.mysqlVersion >= 8 ? [
+              neverTrue ? `\u51FD\u6570\u7D22\u5F15\u4E5F\u6551\u4E0D\u4E86\u4E00\u6761\u7B5B\u4E0D\u51FA\u4EFB\u4F55\u884C\u7684\u6761\u4EF6\uFF0C\u6240\u4EE5\u672C\u6761\u4E0D\u7ED9 DDL\u3002` : `MySQL 8.0 \u53EF\u7528\u51FD\u6570\u7D22\u5F15 ((${ref.raw})) \u76F4\u63A5\u7D22\u5F15\u8868\u8FBE\u5F0F\u7ED3\u679C\uFF0C\u4F46\u67E5\u8BE2\u5FC5\u987B\u5199\u6210\u5B8C\u5168\u76F8\u540C\u7684\u8868\u8FBE\u5F0F\u624D\u80FD\u547D\u4E2D\uFF1B5.7 \u4E0D\u652F\u6301\u3002`
+            ] : [`MySQL 5.7 \u4E0D\u652F\u6301\u51FD\u6570\u7D22\u5F15\uFF0C\u53EA\u80FD\u6539\u5199\u67E5\u8BE2\u3002`],
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed && !neverTrue ? "\u5F53\u524D\u8F93\u5165\u672A\u63D0\u4F9B --schema \u6216\u7248\u672C\u4F4E\u4E8E 8.0\uFF0C\u672A\u751F\u6210 DDL\u3002" : "",
             alreadyNamed ? `\u6309\u540D\u5B57\u5BF9\u9F50\u53EA\u662F\u63D0\u793A\u800C\u4E0D\u662F\u8BC1\u660E\uFF1A\u51FD\u6570\u7D22\u5F15\u7D22\u5F15\u7684\u8868\u8FBE\u5F0F\u5728 information_schema \u91CC\u6CA1\u6709\u53EF\u8BFB\u7684\u5217\u540D\uFF08EXPRESSION \u8FD9\u4E00\u5217 5.7 \u4E5F\u4E0D\u5B58\u5728\uFF09\uFF0C\u6240\u4EE5\u8BF7\u7528 SHOW INDEX \u81EA\u5DF1\u786E\u8BA4\u4E00\u6B21\u3002` : ""
           ].filter(Boolean).join(" "),
           messageEn: [
-            alreadyNamed ? `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} is not served by an index on the raw column value; this table already carries an index named ${wantedName}, which is the name this advice would use, so if that one indexes ${ref.raw} the predicate is served today.` : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
-            rewrite ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).` : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
-            options.mysqlVersion >= 8 ? `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.` : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
-            functionalDdl.length === 0 && !rewrite && !alreadyNamed ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.` : "",
+            alreadyNamed ? `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} is not served by an index on the raw column value; this table already carries an index named ${wantedName}, which is the name this advice would use, so if that one indexes ${ref.raw} the predicate is served today.` : neverTrue ? `Predicate ${ref.predicateText ?? ref.raw} can never be true: DATE() returns midnight and MySQL compares it against the whole datetime on the right, so a literal carrying any time-of-day matches no row. What was probably meant is a day window over the bare column: ${ref.column ?? "col"} >= DATE('${literalDate(ref)}') AND ${ref.column ?? "col"} < DATE('${literalDate(ref)}') + INTERVAL 1 DAY.` : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
+            ...neverTrue ? [] : [
+              rewrite ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).` : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`
+            ],
+            options.mysqlVersion >= 8 ? neverTrue ? `No index can help a predicate that selects nothing, so this finding carries no DDL.` : `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.` : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed && !neverTrue ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.` : "",
             alreadyNamed ? `That match is by name, not proof: an expression key part carries no readable column name in information_schema (the EXPRESSION column is absent on 5.7 too), so confirm with SHOW INDEX.` : ""
           ].filter(Boolean).join(" ")
         });
@@ -23245,18 +23250,19 @@ function buildRewrite(ref) {
   if (dateCall && ref.op === "=") {
     const target = dateCall[1];
     if (day) {
-      const next = new Date(day.getTime() + 24 * 3600 * 1e3);
+      const midnight = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+      const next = new Date(midnight.getTime() + 24 * 3600 * 1e3);
       return {
-        predicate: `${target} >= '${formatDate(day)}' AND ${target} < '${formatDate(next)}'`,
-        why: "\u6309\u5929\u7B49\u503C\u7B49\u4EF7\u4E8E\u5DE6\u95ED\u53F3\u5F00\u533A\u95F4\uFF0C\u53EF\u547D\u4E2D\u8BE5\u5217\u7D22\u5F15",
-        whyEn: "equality on one day is the same set as a half-open range over it, which the column index can serve"
+        predicate: `${target} >= '${formatDate(midnight)}' AND ${target} < '${formatDate(next)}'`,
+        why: "\u6309\u5929\u7B49\u503C\u7B49\u4EF7\u4E8E\u8BE5\u5929\u5DE6\u95ED\u53F3\u5F00\u533A\u95F4\uFF0C\u53EF\u547D\u4E2D\u8BE5\u5217\u7D22\u5F15",
+        whyEn: "equality on one day is the same set as that calendar day as a half-open range, which the column index can serve"
       };
     }
-    return {
-      predicate: `${target} >= ? AND ${target} < DATE_ADD(?, INTERVAL 1 DAY)`,
+    return ref.parameterized ? {
+      predicate: `${target} >= DATE(?) AND ${target} < DATE(?) + INTERVAL 1 DAY`,
       why: "\u7ED1\u5B9A\u53C2\u6570\u4E3A\u65E5\u671F\u65F6\u540C\u6837\u53EF\u6539\u5199\u4E3A\u533A\u95F4\uFF1B\u6CE8\u610F\u4E24\u4E2A ? \u4F20\u540C\u4E00\u4E2A\u503C",
       whyEn: "a bound date parameter rewrites the same way; both ? must carry the same value"
-    };
+    } : void 0;
   }
   const yearCall = /^YEAR\(\s*([\w.`]+)\s*\)$/i.exec(raw);
   if (yearCall && ref.op === "=") {
@@ -23269,24 +23275,27 @@ function buildRewrite(ref) {
         whyEn: "equality on a year is the same set as that year as a half-open range"
       };
     }
-    return {
+    return ref.parameterized ? {
       predicate: `${target} >= MAKEDATE(YEAR(?), 1) AND ${target} < MAKEDATE(YEAR(?) + 1, 1)`,
       why: "\u53C2\u6570\u5316\u573A\u666F\u6539\u5199\u4E3A\u533A\u95F4",
       whyEn: "range form for the parameterised case"
-    };
+    } : void 0;
   }
   const leftCall = /^LEFT\(\s*([\w.`]+)\s*,\s*(\d+)\s*\)$/i.exec(raw);
   if (leftCall && ref.op === "=") {
     const target = leftCall[1];
-    if (value !== "?") {
-      const escaped = value.slice(1, -1).replace(/[%_]/g, (c) => `\\${c}`);
+    const literal2 = stringLiteral(value);
+    if (literal2 !== void 0) {
+      const escaped = literal2.replace(/[%_]/g, (c) => `\\${c}`);
       return {
         predicate: `${target} LIKE '${escaped}%'`,
         why: "\u53D6\u524D\u7F00\u540E\u7B49\u503C\u7B49\u4EF7\u4E8E\u524D\u7F00 LIKE\uFF0C\u53F3\u524D\u7F00 LIKE \u53EF\u7528\u7D22\u5F15",
         whyEn: "comparing a fixed prefix is the same predicate as a LIKE that ends in %, and a leading-anchor LIKE is sargable"
       };
     }
-    return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "\u524D\u7F00\u5339\u914D\u6539\u5199", whyEn: "prefix match rewritten as a LIKE" };
+    if (ref.parameterized) {
+      return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "\u524D\u7F00\u5339\u914D\u6539\u5199", whyEn: "prefix match rewritten as a LIKE" };
+    }
   }
   const arithmetic = /^([\w.`]+)\s*([+\-])\s*(\d+(?:\.\d+)?)$/i.exec(raw);
   if (arithmetic && ref.op && ["=", ">", "<", ">=", "<=", "!=", "<>"].includes(ref.op)) {
@@ -23300,6 +23309,27 @@ function buildRewrite(ref) {
       };
     }
   }
+  return void 0;
+}
+function deadDateComparison(ref) {
+  if (ref.op !== "=") return false;
+  const call = /^DATE\(\s*[\w.`]+\s*\)$/i.exec(ref.raw ?? "");
+  if (!call) return false;
+  const literal2 = stringLiteral((ref.valueText ?? "").trim());
+  if (literal2 === void 0) return false;
+  const parsed = parseDateLiteral(literal2);
+  if (!parsed) return false;
+  return parsed.getUTCHours() !== 0 || parsed.getUTCMinutes() !== 0 || parsed.getUTCSeconds() !== 0;
+}
+function literalDate(ref) {
+  const parsed = parseDateLiteral((ref.valueText ?? "").replace(/'/g, ""));
+  return parsed ? formatDate(parsed).slice(0, 10) : "?";
+}
+function stringLiteral(value) {
+  const single = /^'(?:(?:'')|[^'])*'$/.exec(value);
+  if (single) return value.slice(1, -1);
+  const double = /^"(?:""|[^"])*"$/.exec(value);
+  if (double) return value.slice(1, -1).replace(/""/g, '"');
   return void 0;
 }
 function numericToOtherSide(sign, offset, value) {

@@ -171,6 +171,14 @@ export interface Finding {
   /** Optional LLM-written commentary. Never feeds back into a rule decision. */
   llmNote?: string;
   suggestedDDL: string[];
+  /**
+   * The SQL that replaces the problem - in one of two shapes, which is why the
+   * field is documented rather than guessed at by consumers: SIA004 returns a
+   * *predicate fragment* to drop into the existing `WHERE`, while SIA006 returns a
+   * complete statement. Absent means the rule has no rewrite it can prove
+   * equivalent, and the template stays in the message: a missing field is a
+   * deliberate answer, not an unimplemented one.
+   */
   rewrite?: string;
   needsSchema: boolean;
   needsMetrics: boolean;

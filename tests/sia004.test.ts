@@ -19,7 +19,7 @@ describe("SIA004 function or expression on an indexed column", () => {
     const [finding] = runRule(sia004, "SELECT id FROM orders WHERE DATE(create_time) = ?", {
       schema: TEST_SCHEMA,
     });
-    expect(finding?.rewrite).toBe("create_time >= ? AND create_time < DATE_ADD(?, INTERVAL 1 DAY)");
+    expect(finding?.rewrite).toBe("create_time >= DATE(?) AND create_time < DATE(?) + INTERVAL 1 DAY");
   });
 
   it("positive: YEAR(col) = 2026 becomes the year window", () => {
@@ -137,6 +137,99 @@ describe("SIA004 function or expression on an indexed column", () => {
     // arbitrary DATE_FORMAT pattern, so there is no rewrite to hand over.
     expect(findings[0]?.severity).toBe("warn");
     expect(findings[0]?.rewrite).toBeUndefined();
+  });
+});
+
+describe("SIA004 only turns a string literal into a LIKE pattern", () => {
+  const rewriteOf = (sql: string): string | undefined =>
+    runRule(sia004, sql, { schema: TEST_SCHEMA })[0]?.rewrite;
+
+  it("a quoted prefix becomes a right-anchored LIKE", () => {
+    expect(rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = 'AB12'")).toBe(
+      "order_no LIKE 'AB12%'",
+    );
+  });
+
+  it("a numeric right side gets no rewrite at all", () => {
+    // `LEFT(order_no, 4) = 1234` casts both sides to a number - it is not a prefix
+    // test — and the value has no quotes to strip, so cutting them used to eat the
+    // first digit and emit `order_no LIKE '234%'`, which runs but matches different
+    // rows.
+    expect(rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = 1234")).toBeUndefined();
+  });
+
+  it("a column-to-column comparison gets no rewrite", () => {
+    // The old code sliced the name `remark` as if it were quoted, producing
+    // `order_no LIKE 'emar%'`.
+    expect(
+      rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = remark"),
+    ).toBeUndefined();
+  });
+
+  it("wildcards inside the value are escaped, and a doubled quote survives", () => {
+    expect(rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = 'a%b'")).toBe(
+      "order_no LIKE 'a\\%b%'",
+    );
+    expect(rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = 'o''k'")).toBe(
+      "order_no LIKE 'o''k%'",
+    );
+  });
+
+  it("a bound parameter still gets the CONCAT template", () => {
+    expect(rewriteOf("SELECT id FROM orders WHERE LEFT(order_no, 4) = #{prefix}")).toBe(
+      "order_no LIKE CONCAT(?, '%')",
+    );
+  });
+
+  it("a date or year compared against something unreadable gets no template", () => {
+    // Templates containing `?` are only honest when the value *is* a parameter.
+    expect(rewriteOf("SELECT id FROM orders WHERE YEAR(create_time) = 'not-a-year'")).toBeUndefined();
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = remark")).toBeUndefined();
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = ?")).toContain("DATE(?) + INTERVAL 1 DAY");
+  });
+});
+
+describe("SIA004 anchors the rewritten day at midnight", () => {
+  const rewriteOf = (sql: string): string | undefined =>
+    runRule(sia004, sql, { schema: TEST_SCHEMA })[0]?.rewrite;
+
+  it("withdraws the rewrite when the predicate can never be true", () => {
+    // `DATE(col) = '2026-09-17 13:00:00'` matches no row on any data: DATE() gives
+    // midnight and MySQL compares it against the whole literal. Measured on 8.0.46
+    // - the day window returns the rows, this predicate does not. A rewrite that
+    // returned rows here would be inventing a result set, and an index for a
+    // predicate that filters nothing is noise, so both are withheld.
+    const [finding] = runRule(
+      sia004,
+      "SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17 13:00:00'",
+      { schema: TEST_SCHEMA },
+    );
+    expect(finding?.rewrite).toBeUndefined();
+    expect(finding?.suggestedDDL).toEqual([]);
+    expect(finding?.severity).toBe("error");
+    expect(finding?.message).toContain("永远不会成立");
+    expect(finding?.messageEn).toContain("can never be true");
+    // The replacement it suggests is the one that matches the day.
+    expect(finding?.messageEn).toContain("DATE('2026-09-17') + INTERVAL 1 DAY");
+  });
+
+  it("a midnight literal is still the ordinary day window", () => {
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17 00:00:00'")).toBe(
+      "create_time >= '2026-09-17 00:00:00' AND create_time < '2026-09-18 00:00:00'",
+    );
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17T23:59:59'")).toBeUndefined();
+  });
+
+  it("rolls the month and the leap year correctly", () => {
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = '2026-09-30'")).toContain(
+      "create_time < '2026-10-01 00:00:00'",
+    );
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = '2024-02-29'")).toContain(
+      "create_time < '2024-03-01 00:00:00'",
+    );
+    expect(rewriteOf("SELECT id FROM orders WHERE DATE(create_time) = '2026-12-31'")).toContain(
+      "create_time < '2027-01-01 00:00:00'",
+    );
   });
 });
 

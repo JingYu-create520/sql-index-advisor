@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.15](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.15) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.16](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.16) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -252,6 +252,8 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 **一条根本跑不起来的深分页改写。** `SELECT id, user_id, amount FROM orders WHERE … LIMIT 100000, 20`（原句没写表别名）拿到的延迟关联是 `… AS page JOIN orders ON `id` = page.`id``，MySQL 回的是 `ERROR 1052 (23000): Column 'id' in on clause is ambiguous`——派生表 `page` 也带 `id` 这一列。而且它把三列投影换成了 `SELECT *`，就算能跑也会把调用方没要的列塞回去。这条是做了测试套件从来没做过的事抓出来的：把工具吐出的改写真机执行一遍。现在改写自带别名 `t`，JOIN、投影、外层排序全部经它限定；并且**只要投影没法原样搬过去就撤回改写**（`rewrite` 字段留空，模板和原因写进 message）：含函数、`AS` 改名、`DISTINCT`，或者排序键限定不了。`SELECT amount + 0` 是把这件事从"改写时小心一点"变成解析层标记的原因——表达式里确实有一个列，把投影当成那个列，返回的值就变了。
 
+**两条会改变结果的改写。** 两条都是同一个动作抓出来的：去问真 MySQL "这两种写法筛出来的是不是同一批行"，而测试套件从来没问过。`LEFT(code, 3) = 123` 被改成 `code LIKE '2%'`——实现按"首尾是引号"切字符，可这个数字根本没有引号，于是模式丢了第一位；而且 MySQL 里的数字比较压根不是前缀语义。`LEFT(code, 3) = remark` 被改成 `code LIKE 'emar%'`。两条都能正常执行、都筛了别的行，这是这个工具能给出的最坏建议。现在改写要求右端确实是字符串字面量，数字、列引用、读不懂的值一律不给改写。同一个探测还发现 `DATE(create_time) = '2026-09-17 13:00:00'` 在 8.0.46 上一行都筛不出来（`DATE()` 是当天零点，比较却针对右端整个日期时间——同一天的区间是 3 行，这条谓词是 0 行），所以这里不给改写，而是直接说明这条条件恒不成立，并写出它本来大概想要的那天区间。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
@@ -271,9 +273,12 @@ npm run typecheck     # tsc --noEmit，strict + noUncheckedIndexedAccess
 npm test              # vitest：解析器、7 条规则、引擎、报告、MCP（含真实 stdio 握手）
 npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
+node scripts/verify-rewrites.mjs   # 需要一个 MySQL 容器，见下
 ```
 
-290 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句；另有一份从真实 8.0.46 导出的 `schema.json`，里面带着函数索引、JSON 多值索引和全文索引——这些正是手写 fixture 想不到的形状。
+299 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句；另有一份从真实 8.0.46 导出的 `schema.json`，里面带着函数索引、JSON 多值索引和全文索引——这些正是手写 fixture 想不到的形状。
+
+`scripts/verify-rewrites.mjs` 补的是测试永远覆盖不了的那一面：工具建议的 SQL **到底能不能执行、筛出来的是不是同一批行**。它自己不起容器，对着快速开始里那个 demo 容器跑（`docker run -d --name sia-mysql -e MYSQL_ROOT_PASSWORD=sia -e MYSQL_DATABASE=demo mysql:8.0`）；只要有任何一条改写结果不同就以非零退出，而且比较的是主键集合，不是行数。下面两条改写缺陷都是它抓出来的。
 
 ## 许可
 

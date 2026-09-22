@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.16 — 2026-09-22
+
+### Fixed
+
+- **`LEFT(col, n) = <not a string literal>` produced a LIKE pattern out of thin air.**
+  The value was cut with `slice(1, -1)` on the assumption that its first and last
+  characters were quotes. `LEFT(code, 3) = 123` therefore became `code LIKE '2%'`
+  (the number lost its first digit) and `LEFT(code, 3) = remark` became
+  `code LIKE 'emar%'`. Both execute cleanly and select different rows than the
+  original, which is the failure mode this project rates worst. A rewrite now
+  requires a genuine single-quoted (or double-quoted) literal; a number, a column
+  reference or anything unreadable gets no rewrite at all. A numeric comparison is
+  not prefix semantics in MySQL either - both sides are cast to a number - so it is
+  not merely hard to rewrite, it should not be rewritten.
+- **A day window built from a datetime literal was anchored at the wrong hour.**
+  `DATE(create_time) = '2026-09-17 13:00:00'` produced
+  `create_time >= '2026-09-17 13:00:00' AND create_time < '2026-09-18 13:00:00'`.
+  Measured on 8.0.46, the original predicate returns **no rows at all** - `DATE()` is
+  midnight and the comparison runs against the whole literal - so no time-carrying
+  window can be equivalent. The rewrite is withdrawn for that shape and the finding
+  says what is actually wrong: the predicate can never be true, with the day window
+  it probably meant. A midnight literal keeps the ordinary (correct) range.
+- **The bound-parameter date template assumed a date-only value.** It is now
+  `col >= DATE(?) AND col < DATE(?) + INTERVAL 1 DAY`, which keeps day semantics
+  whatever the parameter carries. The same template is only offered when the right
+  side really is a parameter, never for an arbitrary value.
+
+### Added
+
+- `scripts/verify-rewrites.mjs` + `scripts/verify-rewrites.sql`: asks a live MySQL
+  whether each rewrite the tool emits selects exactly the same rows as the original,
+  comparing primary-key sets rather than row counts, and exits non-zero when any
+  differs. Both defects above were found by it; neither was visible to an assertion
+  about the emitted text.
+
+### Verified
+
+13 predicates run through the new check against MySQL 8.0.46 - every emitted rewrite
+is equivalent, every withdrawn one is skipped with a reason. 299 tests pass, both
+example runs unchanged at 6 and 9 suggestions.
+
 ## 0.1.15 — 2026-09-22
 
 ### Fixed
