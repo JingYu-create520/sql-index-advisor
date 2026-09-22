@@ -70,9 +70,18 @@ runs:
         else
           entry="${GITHUB_ACTION_PATH}/dist/cli.js"
           if [ ! -f "${entry}" ]; then
-            echo "::error::${entry} is missing. Pin a tag from 0.1.6 or later, or pass the cli input."
+            echo "::error::${entry} is missing. Pin a tag from 0.1.8 or later, or pass the cli input."
             exit 1
           fi
+          case "${entry}" in
+            *" "*)
+              # The command is built as words on purpose (see the steps below), so a
+              # space in the checkout path would split it in half and produce a
+              # confusing module-not-found. Say what to do instead.
+              echo "::error::the action path contains a space (${entry}); set the cli input explicitly, e.g. cli: npx --yes github:JingYu-create520/sql-index-advisor sia"
+              exit 1
+              ;;
+          esac
           echo "bin=node ${entry}" >> "$GITHUB_OUTPUT"
           node "${entry}" --version
         fi
@@ -100,7 +109,7 @@ runs:
         EXTRA_ARGS: ${{ inputs.args }}
       run: |
         set +e
-        # Findings must not break a build here: the job below decides that. A
+        # Findings must not break a build here: the gate step below decides that. A
         # non-zero exit larger than 1 means the tool itself never ran, and that is
         # a broken review, not a clean bill of health, so it has to be loud.
         ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
@@ -111,17 +120,28 @@ runs:
           ${EXTRA_ARGS} | tee sia-annotations.txt
         code=${PIPESTATUS[0]}
         if [ "${code}" -gt 1 ]; then
-          echo "::error::sql-index-advisor failed to run (exit ${code}). Check the path and schema inputs; the annotations below, if any, are incomplete."
+          echo "::error::sql-index-advisor failed to run (exit ${code}). Check the path and schema inputs; the annotations above, if any, are incomplete."
           exit 1
         fi
-        set -e
 
+        # Exit 1 here means "there are findings", which is the normal outcome of a
+        # review and must not redden the job: this is the step that broke first, by
+        # running the JSON pass under `set -e` after turning it back on.
         ${CLI} "${PATH_ARG}" ${SCHEMA_FLAG} \
           --format json \
           --min-severity "${MIN_SEVERITY}" \
           --mysql-version "${MYSQL_VERSION}" \
           --top "${TOP}" \
           ${EXTRA_ARGS} > sia-report.json
+        code=$?
+        if [ "${code}" -gt 1 ]; then
+          echo "::error::sql-index-advisor could not produce the JSON report (exit ${code})."
+          exit 1
+        fi
+        if [ ! -s sia-report.json ]; then
+          echo "::error::sia-report.json is empty after a clean run, which should not happen."
+          exit 1
+        fi
         echo "report-file=sia-report.json" >> "$GITHUB_OUTPUT"
 
         {

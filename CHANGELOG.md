@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.9 — 2026-09-22
+
+### Fixed
+
+- **The Action reddened a build it was only supposed to comment on.** The annotate
+  step turned `set -e` back on and then ran the JSON pass, which exits 1 whenever
+  there are findings, so a review with `fail-on: off` still failed the job once the
+  rest of the plumbing worked. Both passes now run under the same rule: exit 1 means
+  findings and is not an error, anything above 1 means the tool could not run and
+  fails loudly. An empty report after a clean run is also treated as a failure.
+- The resolve step refuses to continue when the checkout path contains a space,
+  with a message saying what to pass as `cli`, instead of letting Node fail on a
+  half-split module path.
+
+Proved by re-running the workflow on this repository's own pull request: attempt 3
+produced 8 annotations but failed the job; the fix is what this release is.
+
 ## 0.1.8 — 2026-09-22
 
 ### Fixed
