@@ -47,6 +47,36 @@ export const sia001: Rule = {
         findings.push(dynamicTableFinding(record, bucket));
         continue;
       }
+
+      // `a = 1 OR b = 2` has no single index that serves it: the optimizer either
+      // merges one index per branch or scans. Proposing just `a` was error-severity
+      // advice for an index that changes nothing, so the branches get their own
+      // finding, with no DDL and the two rewrites that do work. This sits above the
+      // candidate guards on purpose: a statement whose only predicates are OR
+      // branches has no candidate at all, and that is exactly when the explanation
+      // is needed.
+      if (bucket.orBranches.length > 1) {
+        const columns = [...new Set(bucket.orBranches.map((r) => r.column))];
+        findings.push({
+          rule: RULE_ID,
+          severity: "info",
+          sql: truncateSql(record.parsed.sql),
+          fingerprint: record.fingerprint,
+          source: record.source,
+          queryTime: record.metrics?.queryTime,
+          rowsExamined: record.metrics?.rowsExamined ?? record.maxRowsExamined,
+          occurrences: record.occurrences,
+          needsSchema: false,
+          needsMetrics: false,
+          table: bucket.table,
+          suggestedDDL: [],
+          message: `条件里的 OR 跨了不同列（分支列 ${columns.join(", ")}），一条复合索引救不了它：优化器要么给每个分支各用一个索引做 index merge，要么直接全扫。真正的出路是两条，给每个分支列各建索引并在 EXPLAIN 里确认出现 Using union，或者把语句改写成 UNION ALL 让每个分支自己走索引。本条不给 DDL，因为只建单侧索引通常就是那条没用的建议。`,
+          messageEn: `The OR spans different columns (branch columns ${columns.join(
+            ", ",
+          )}), which no single composite index serves: the optimizer either merges one index per branch or scans. Two ways out, index each branch column and confirm "Using union" in EXPLAIN, or rewrite as UNION ALL so each branch uses its own index. No DDL here, because indexing one side alone is usually the advice that does nothing.`,
+        });
+      }
+
       const candidate = candidateColumns(bucket, table);
       if (candidate.length === 0) continue;
 
@@ -109,6 +139,8 @@ export const sia001: Rule = {
       });
     }
 
+
+
     return findings;
   },
 };
@@ -131,7 +163,11 @@ function candidateColumns(bucket: TableBucket, table?: SchemaTable): string[] {
   ordered.push(...equality);
   if (orderingUsable) ordered.push(...ordering);
   ordered.push(...inList.slice(0, 1));
-  if (orderingUsable) ordered.push(...range.slice(0, 1));
+  // The range column belongs in the index whatever else is there. The guard above
+  // is about not putting a sort behind a range; it must not delete the range
+  // itself, which is what made `WHERE create_time >= ?` on a table with no index
+  // on that column report nothing at all.
+  ordered.push(...range.slice(0, 1));
 
   const names: string[] = [];
   for (const ref of ordered) {

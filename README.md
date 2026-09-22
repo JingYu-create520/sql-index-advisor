@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.11](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.11) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.12](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.12) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
@@ -210,6 +210,8 @@ Off by default: no key, no network, deterministic text. When on, the endpoint is
   - `LIMIT #{offset}, #{size}` in a Mapper carries no static value, so SIA006 cannot judge it. Feed it a slow log instead.
   - `mobile = ?` bound to a Java `Long`: SIA005 cannot see the parameter type.
   - Correlated subqueries are not expanded. SIA006 degrades to a template rather than risk a rewrite that changes the result set.
+  - Tables inside an `IN (SELECT ...)` are not analysed, only the outer statement. The report now says so per query instead of going quiet; auditing the inner tables means parsing them as their own statements, which is a change we have not made.
+  - `LIMIT ?, ?` cannot be judged for depth at all, since the offset is a bind parameter. That is now attributed as `the OFFSET is a bound parameter` rather than left as an unexplained absence, and the fix for a real project is to feed the slow log, where the offsets are numbers.
 
 Supported SQL subset: one `SELECT` / `INSERT` / `UPDATE` / `DELETE` per statement (inline input and `analyze_sql` accept several, separated by `;`), ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE` (a `LIKE` that starts with `%` is reported as un-indexable rather than ignored), `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note. It does not crash, and it does not invent a recommendation. Statements that run together without a `;` between them are refused rather than guessed at, because parsing two queries as one produces an index for a column of the other table.
 
@@ -247,6 +249,10 @@ These last two came from running the tool against somebody else's code rather th
 
 **Three that only other people's code could show.** A `DATE_FORMAT()` in the SELECT list triggered the "your index is unusable" rule even though the `WHERE` clause was a clean range; a table name MyBatis assembles at runtime (`device_message_${deviceId}`) got a `CREATE INDEX` for a table that does not exist, which fails the moment the migration file is run; and two statements filtering the same columns in a different written order produced two suggestions, so the migration file asked for one index twice. The first two are fixed by scope (an expression only matters inside a predicate; a runtime table name gets an explanation with no DDL), the third by collapsing suggestions whose column sets are equal and reporting the absorbed queries on the survivor. All three are pinned in `tests/`, and two of them are now asserted over the whole generated corpus.
 
+**Range-only predicates were invisible to the main rule.** `WHERE create_time >= ?` on a table with no index on that column produced no advice at all. The guard that stops a sort being placed behind a range had been written as "skip the range when there is nothing to sort", so every date-range and amount-range filter in three audited projects came back silent. A range is an access path on its own, and this was the largest false negative found by reading other people's code rather than our own tests.
+
+**A bracketed condition group was opaque.** Inside `( ... )` the tokens carry depth 1, and the AND/OR splitters match on depth 0, so `AND (a = 1 OR b = 2)`, the single most common shape in a MyBatis `<where>` block, was reported as an unrecognised predicate and dropped. Groups are now unwrapped and relifted before classification, which also made the two OR cases above reachable: an OR over one column folds into an IN list, an OR over different columns gets an explanation with no DDL, because a single-sided index is the advice that does nothing.
+
 **What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. The obvious upgrade, reading the database's own statistics, was measured and rejected: `information_schema.STATISTICS.CARDINALITY` reported 1 for a column with 2 distinct values, both before and after `ANALYZE TABLE`, and 42 for the primary key of a table that had just been loaded with 100,000 rows. It estimates per index prefix, and low-cardinality columns are where it is worst. The only source that gets it right, `information_schema.COLUMN_STATISTICS`, is 8.0-only and empty until someone runs `ANALYZE TABLE ... UPDATE HISTOGRAM` on that specific column. Full numbers in [docs/rules.md](docs/rules.md). So the gap stays, and it is closed per finding by the selectivity query printed next to the suggestion.
 
 ## What has not been verified
@@ -268,7 +274,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-242 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+249 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 

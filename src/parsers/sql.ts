@@ -15,6 +15,7 @@ import {
   isWord,
   splitOnAnd,
   splitOnComma,
+  splitOnWord,
   tokenize,
   tokensToString,
   type Token,
@@ -585,6 +586,46 @@ function readWhere(tokens: Token[], out: Partial, notes: string[]): void {
   }
 }
 
+/**
+ * Strip one layer of parentheses around a whole condition and relift the tokens
+ * inside it to this level, so the split helpers (which match on depth) can see
+ * the AND and OR inside. Returns undefined when the pair does not wrap the whole
+ * group, because then it is a function call or a row list, not a bracketed
+ * condition.
+ */
+function unwrapConditionGroup(tokens: Token[]): Token[] | undefined {
+  if (tokens.length < 3 || tokens[0]!.value !== "(" || matchingClose(tokens, 0) !== tokens.length - 1) {
+    return undefined;
+  }
+  const base = tokens[0]!.depth;
+  return tokens.slice(1, -1).map((t) => ({ ...t, depth: t.depth - base - 1 }));
+}
+
+/**
+ * `a = 1 OR a = 2` is an IN list and indexable; `a = 1 OR b = 2` is not one
+ * access path at all. Fold the first, and mark the rest as OR branches so the
+ * rules can say what actually helps instead of proposing an unusable index.
+ */
+function classifyOr(branches: Token[][], scope: "where" | "join-on", notes: string[]): ColumnRef[] {
+  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes)).filter((g) => g.length > 0);
+  if (perBranch.length === 0) return [];
+  const oneColumnPerBranch = perBranch.every((g) => g.length === 1);
+  const columns = perBranch.map((g) => g[0]!.column);
+  const allEquality = perBranch.every((g) => (g[0]!.op ?? "=") === "=");
+
+  if (oneColumnPerBranch && allEquality && new Set(columns).size === 1) {
+    const first = perBranch[0]![0]!;
+    return [{ ...first, scope: "where-in", op: "in", raw: tokensToString(joinOrBranches(branches)) }];
+  }
+
+  return perBranch.flat().map((ref) => ({ ...ref, scope: "where-or" as const }));
+}
+
+/** Rejoin the branches for the evidence text; they came from one predicate group. */
+function joinOrBranches(branches: Token[][]): Token[] {
+  return branches.reduce<Token[]>((acc, b, i) => (i === 0 ? [...b] : [...acc, { type: "word", value: "or" } as Token, ...b]), []);
+}
+
 function classifyPredicate(
   pred: Token[],
   scope: "where" | "join-on",
@@ -592,10 +633,29 @@ function classifyPredicate(
 ): ColumnRef[] {
   if (pred.length === 0) return [];
 
-  // A parenthesised group: unwrap and retry so `(a = 1)` behaves like `a = 1`.
-  if (pred[0]!.value === "(" && matchingClose(pred, 0) === pred.length - 1) {
-    return classifyPredicate(pred.slice(1, -1), scope, notes);
+  // A parenthesised group: strip the outer pair and bring what is left back to
+  // this level. The relift matters: tokens keep the depth they were tokenised
+  // with, so `(a = 1 OR b = 2)` used to be handed to the operator search as a
+  // group whose inner keywords sit at depth 1, invisible to the split helpers.
+  // Every `AND (x = ? OR y = ?)` inside a MyBatis `<where>` block hit that and
+  // came back as "unrecognised predicate", which is a silent miss.
+  const unwrapped = unwrapConditionGroup(pred);
+  if (unwrapped) {
+    // Inside the parentheses the connectives still apply: `(a = 1 AND b = 2)` is
+    // a conjunction, and `(a = 1 OR a = 2)` is an IN list.
+    const andGroups = splitOnAnd(unwrapped);
+    if (andGroups.length > 1) {
+      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes));
+    }
+    return classifyPredicate(unwrapped, scope, notes);
   }
+
+  // An OR group is not one access path, so it has to be resolved before the
+  // operator search: `a = 1 OR b = 2` otherwise reads as "a = 1" with the rest
+  // swallowed into the value, which produced error-severity advice for an index
+  // the optimizer can only use via index merge on both sides.
+  const orBranches = splitOnWord(pred, "or");
+  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes);
 
   const operator = detectOperator(pred);
   if (!operator) {
@@ -637,7 +697,15 @@ function classifyPredicate(
       break;
     }
     case "in": {
-      if (right.some((t) => isWord(t, "select"))) leftRef.op = "in-subquery";
+      if (right.some((t) => isWord(t, "select"))) {
+        leftRef.op = "in-subquery";
+        // The tables inside an IN subquery are never registered, so an un-indexed
+        // join column behind `IN (SELECT role_id FROM upms_user_role WHERE ...)`
+        // gets no advice. Analysing the inner statement here would mean parsing it
+        // as its own query, which is a bigger change than saying so; until then the
+        // silence has a reason attached.
+        notes.push(`IN 子查询内的表未参与判定（只分析外层）：${truncate(tokensToString(right))}`);
+      }
       break;
     }
     default:

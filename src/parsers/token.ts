@@ -176,6 +176,24 @@ export function indexOfPunct(tokens: Token[], punct: string, from = 0, depth = 0
 /**
  * Split on top-level `AND`, skipping the AND that belongs to `BETWEEN x AND y`.
  */
+/** Split a token list on a top-level keyword, ignoring anything in parentheses. */
+export function splitOnWord(tokens: Token[], word: string, baseDepth = tokens[0]?.depth ?? 0): Token[][] {
+  const groups: Token[][] = [];
+  let current: Token[] = [];
+  for (const t of tokens) {
+    // Relative to the group, not absolute: after a parenthesis is unwrapped the
+    // tokens keep the depth they were tokenised with.
+    if (t.depth === baseDepth && isWord(t, word)) {
+      groups.push(current);
+      current = [];
+      continue;
+    }
+    current.push(t);
+  }
+  groups.push(current);
+  return groups.filter((g) => g.length > 0);
+}
+
 export function splitOnAnd(tokens: Token[]): Token[][] {
   const groups: Token[][] = [];
   let current: Token[] = [];

@@ -111,6 +111,36 @@ describe("SIA001 missing index candidate", () => {
   });
 
   /**
+   * A range predicate on its own is still an access path: `WHERE create_time >= ?`
+   * on a table with no index on that column is the textbook case for one. The
+   * ordering guard used to swallow the range column too, so every date-range or
+   * amount-range query came back silent.
+   */
+  it("positive: a range-only predicate still gets its index", () => {
+    const findings = runRule(sia001, "SELECT id FROM orders WHERE create_time >= '2026-01-01'", {
+      schema: TEST_SCHEMA,
+    });
+    expect(findings.find((f) => f.table === "orders")?.indexColumns).toEqual(["create_time"]);
+  });
+
+  it("positive: an OR over different columns is explained, not indexed on one side", () => {
+    const findings = runRule(sia001, "SELECT id FROM order_item WHERE order_id = 1 OR sku_id = 2", {
+      schema: TEST_SCHEMA,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe("info");
+    expect(findings[0]?.suggestedDDL).toEqual([]);
+    expect(findings[0]?.messageEn).toContain("UNION ALL");
+  });
+
+  it("positive: an OR over one column is an IN list and is indexable", () => {
+    const findings = runRule(sia001, "SELECT id FROM orders WHERE shop_id = 5 AND (status = 1 OR status = 2)", {
+      schema: TEST_SCHEMA,
+    });
+    expect(findings.find((f) => f.table === "orders")?.indexColumns).toEqual(["shop_id", "status"]);
+  });
+
+  /**
    * `ON d.order_id = o.id` puts the driving table's primary key in the bucket, but
    * there it is a value handed to the inner table, not a filter. InnoDB already
    * appends the PK to every secondary index, so that slot bought nothing and it

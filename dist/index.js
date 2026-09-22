@@ -273,6 +273,20 @@ function indexOfPunct(tokens, punct, from = 0, depth = 0) {
   }
   return -1;
 }
+function splitOnWord(tokens, word, baseDepth = tokens[0]?.depth ?? 0) {
+  const groups = [];
+  let current = [];
+  for (const t of tokens) {
+    if (t.depth === baseDepth && isWord(t, word)) {
+      groups.push(current);
+      current = [];
+      continue;
+    }
+    current.push(t);
+  }
+  groups.push(current);
+  return groups.filter((g) => g.length > 0);
+}
 function splitOnAnd(tokens) {
   const groups = [];
   let current = [];
@@ -789,11 +803,40 @@ function readWhere(tokens, out, notes) {
     out.columns.push(...classifyPredicate(pred, "where", notes));
   }
 }
+function unwrapConditionGroup(tokens) {
+  if (tokens.length < 3 || tokens[0].value !== "(" || matchingClose(tokens, 0) !== tokens.length - 1) {
+    return void 0;
+  }
+  const base = tokens[0].depth;
+  return tokens.slice(1, -1).map((t) => ({ ...t, depth: t.depth - base - 1 }));
+}
+function classifyOr(branches, scope, notes) {
+  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes)).filter((g) => g.length > 0);
+  if (perBranch.length === 0) return [];
+  const oneColumnPerBranch = perBranch.every((g) => g.length === 1);
+  const columns = perBranch.map((g) => g[0].column);
+  const allEquality = perBranch.every((g) => (g[0].op ?? "=") === "=");
+  if (oneColumnPerBranch && allEquality && new Set(columns).size === 1) {
+    const first = perBranch[0][0];
+    return [{ ...first, scope: "where-in", op: "in", raw: tokensToString(joinOrBranches(branches)) }];
+  }
+  return perBranch.flat().map((ref) => ({ ...ref, scope: "where-or" }));
+}
+function joinOrBranches(branches) {
+  return branches.reduce((acc, b, i) => i === 0 ? [...b] : [...acc, { type: "word", value: "or" }, ...b], []);
+}
 function classifyPredicate(pred, scope, notes) {
   if (pred.length === 0) return [];
-  if (pred[0].value === "(" && matchingClose(pred, 0) === pred.length - 1) {
-    return classifyPredicate(pred.slice(1, -1), scope, notes);
+  const unwrapped = unwrapConditionGroup(pred);
+  if (unwrapped) {
+    const andGroups = splitOnAnd(unwrapped);
+    if (andGroups.length > 1) {
+      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes));
+    }
+    return classifyPredicate(unwrapped, scope, notes);
   }
+  const orBranches = splitOnWord(pred, "or");
+  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes);
   const operator = detectOperator(pred);
   if (!operator) {
     if (!isWord(pred[0], "not", "exists")) {
@@ -829,7 +872,10 @@ function classifyPredicate(pred, scope, notes) {
       break;
     }
     case "in": {
-      if (right.some((t) => isWord(t, "select"))) leftRef.op = "in-subquery";
+      if (right.some((t) => isWord(t, "select"))) {
+        leftRef.op = "in-subquery";
+        notes.push(`IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09\uFF1A${truncate(tokensToString(right))}`);
+      }
       break;
     }
     default:
@@ -1435,9 +1481,38 @@ function isDirectory(path) {
     return false;
   }
 }
+var REASON_PREFIX_EN = [
+  ["\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped"],
+  ["IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A", "tables inside the IN subquery took part in no rule"],
+  ["\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09", " (outer statement only)"],
+  ["\uFF0C\u5DF2\u8DF3\u8FC7", ", skipped"],
+  ["\u672A\u627E\u5230\u7247\u6BB5", "fragment not found"],
+  ["\u52A8\u6001\u5206\u652F\u7EC4\u5408\u8D85\u8FC7", "dynamic branch combinations exceeded"],
+  ["\u5DF2\u79FB\u9664\u672A\u652F\u6301\u7684\u6807\u7B7E", "unsupported tag removed"],
+  ["\u672A\u627E\u5230\u7247\u6BB5\uFF0C\u5DF2\u8DF3\u8FC7", "fragment not found, skipped"],
+  ["\u4E2D\u7684\u8868\u8FBE\u5F0F\u65E0\u6CD5\u9759\u6001\u5206\u6790", "expression cannot be analysed statically"],
+  ["WHERE \u542B\u9876\u5C42 OR", "WHERE contains a top-level OR"],
+  ["\u6761\u8BED\u53E5", "statement(s)"],
+  ["include refid", "include refid"],
+  // Punctuation last: a note is easier to read in the English report when the
+  // full-width colon and comma inside it are normalised too.
+  ["\uFF1A", ": "],
+  ["\uFF0C", ", "]
+];
+function englishReason(reason) {
+  let out = reason;
+  let touched = false;
+  for (const [zh, en] of REASON_PREFIX_EN) {
+    if (out.includes(zh)) {
+      out = out.split(zh).join(en);
+      touched = true;
+    }
+  }
+  return touched ? out : reason;
+}
 var parseNote = (text) => ({
   note: text,
-  noteEn: text.replace("\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped").replace("\u5DF2\u8DF3\u8FC7", "skipped")
+  noteEn: englishReason(text)
 });
 function loadInput(source, options = {}) {
   const notes = [];
@@ -1460,11 +1535,16 @@ function loadInput(source, options = {}) {
     }
     const statements = loadMapperFiles(files);
     const records = mapperStatementsToRecords(statements);
-    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
-    if (unjudged > 0) {
+    const reasons = /* @__PURE__ */ new Map();
+    for (const record of records) {
+      for (const reason of new Set(record.parsed.notes)) {
+        reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    for (const [reason, count] of [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
       notes.push({
-        note: `${unjudged}/${records.length} \u6761\u8BED\u53E5\u7684\u6761\u4EF6\u65E0\u6CD5\u9759\u6001\u8BC6\u522B\uFF08\u591A\u4E3A \${} \u6587\u672C\u66FF\u6362\uFF0C\u4F8B\u5982 where \${criterion.condition}\uFF09\uFF0C\u8FD9\u4E9B\u8BED\u53E5\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u8FD9\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
-        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`
+        note: `${count} \u6761\u8BED\u53E5\uFF1A${reason}\u3002\u8FD9\u90E8\u5206\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
+        noteEn: `${count} statement(s): ${englishReason(reason)}. This part took no rule, which is not a pass.`
       });
     }
     return { kind, notes, records };

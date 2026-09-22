@@ -217,3 +217,41 @@ describe("parseSql: snapshot", () => {
     ).toMatchSnapshot();
   });
 });
+
+/**
+ * Parenthesised condition groups used to be opaque: their inner tokens sit at
+ * depth 1, so the AND/OR split helpers never saw them and every
+ * `AND (a = ? OR b = ?)` in a MyBatis <where> block came back as an unrecognised
+ * predicate. An OR over different columns is also not one access path, and an OR
+ * over the same column is an IN list.
+ */
+describe("parseSql: parenthesised groups and OR", () => {
+  const cols = (sql: string) => parseSql(sql).columns.map((c) => c.column + ":" + c.scope);
+
+  it("reads a bracketed conjunction", () => {
+    expect(cols("SELECT id FROM t WHERE (a = 1 AND b = 2) AND c = 3")).toEqual([
+      "a:where-eq",
+      "b:where-eq",
+      "c:where-eq",
+    ]);
+  });
+
+  it("folds an OR over one column into an IN list", () => {
+    expect(cols("SELECT id FROM t WHERE (status = 1 OR status = 2)")).toEqual(["status:where-in"]);
+    expect(parseSql("SELECT id FROM t WHERE (status = 1 OR status = 2)").notes).toEqual([]);
+  });
+
+  it("keeps an OR over different columns as branches, next to the AND-ed parts", () => {
+    expect(cols("SELECT id FROM t WHERE a = 1 AND (status = 1 OR status = 2)")).toEqual([
+      "a:where-eq",
+      "status:where-in",
+    ]);
+    expect(cols("SELECT id FROM t WHERE a = 1 OR b = 2")).toEqual(["a:where-or", "b:where-or"]);
+  });
+
+  it("never invents a column from an OR branch", () => {
+    const parsed = parseSql("SELECT id FROM t WHERE a = 1 OR b = 2");
+    expect(parsed.columns.every((c) => c.column === "a" || c.column === "b")).toBe(true);
+    expect(parsed.notes.join(" ")).toContain("OR");
+  });
+});

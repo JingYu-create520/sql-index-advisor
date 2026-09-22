@@ -43,10 +43,50 @@ export interface LoadedInput {
   notes: InputNote[];
 }
 
+/**
+ * Parser notes are written in Chinese, in the file that produced them. This maps
+ * the leading clause so the English report does not hand an agent a wall of text
+ * it cannot read; anything unknown passes through, which is still better than
+ * dropping the caveat.
+ */
+const REASON_PREFIX_EN: Array<[string, string]> = [
+  ["无法识别的谓词已跳过", "unrecognised predicate skipped"],
+  ["IN 子查询内的表未参与判定", "tables inside the IN subquery took part in no rule"],
+  ["（只分析外层）", " (outer statement only)"],
+  ["，已跳过", ", skipped"],
+  ["未找到片段", "fragment not found"],
+  ["动态分支组合超过", "dynamic branch combinations exceeded"],
+  ["已移除未支持的标签", "unsupported tag removed"],
+  ["未找到片段，已跳过", "fragment not found, skipped"],
+  ["中的表达式无法静态分析", "expression cannot be analysed statically"],
+  ["WHERE 含顶层 OR", "WHERE contains a top-level OR"],
+  ["条语句", "statement(s)"],
+  ["include refid", "include refid"],
+  // Punctuation last: a note is easier to read in the English report when the
+  // full-width colon and comma inside it are normalised too.
+  ["：", ": "],
+  ["，", ", "],
+];
+
+function englishReason(reason: string): string {
+  // Apply every pair, not the first match: one note carries a prefix and a
+  // trailing clause ("...（只分析外层）: (select ...)"), and stopping at the first
+  // hit left half of the sentence untranslated in the English report.
+  let out = reason;
+  let touched = false;
+  for (const [zh, en] of REASON_PREFIX_EN) {
+    if (out.includes(zh)) {
+      out = out.split(zh).join(en);
+      touched = true;
+    }
+  }
+  return touched ? out : reason;
+}
+
 /** Wrap a parser-produced note, which exists only as one line of text. */
 const parseNote = (text: string): InputNote => ({
   note: text,
-  noteEn: text.replace("无法识别的谓词已跳过", "unrecognised predicate skipped").replace("已跳过", "skipped"),
+  noteEn: englishReason(text),
 });
 
 /** Read a file (or accept inline text) and produce query records. */
@@ -78,17 +118,23 @@ export function loadInput(
     }
     const statements = loadMapperFiles(files);
     const records = mapperStatementsToRecords(statements);
-    // A MyBatis `${...}` is a text substitution, so the predicate is not in the
-    // file at all: `${criterion.condition}` reaches the parser as `where ?` and
-    // every rule correctly finds nothing to say. Without this line the run prints
-    // "nothing to report" over a project whose filters were never visible, which
-    // is exactly the silence-means-passed failure. Seen on a real project where all
-    // 205 statements were generated from Example criteria.
-    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
-    if (unjudged > 0) {
+    /**
+     * Group the per-record parse notes by reason and report them with counts.
+     * The first version of this said "N statements had predicates that cannot be
+     * resolved statically (usually a ${} text substitution)" over a run where most
+     * of those N were INSERTs and IN subqueries, which blamed the wrong thing and
+     * taught nobody anything. Each distinct reason now gets its own line.
+     */
+    const reasons = new Map<string, number>();
+    for (const record of records) {
+      for (const reason of new Set(record.parsed.notes)) {
+        reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    for (const [reason, count] of [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
       notes.push({
-        note: `${unjudged}/${records.length} 条语句的条件无法静态识别（多为 \${} 文本替换，例如 where \${criterion.condition}），这些语句没有参与判定，这不等于通过。`,
-        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`,
+        note: `${count} 条语句：${reason}。这部分没有参与判定，不等于通过。`,
+        noteEn: `${count} statement(s): ${englishReason(reason)}. This part took no rule, which is not a pass.`,
       });
     }
     return { kind, notes, records };

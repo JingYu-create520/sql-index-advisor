@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.11](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.11) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.12](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.12) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -200,6 +200,8 @@ sia slow.log --llm
   - Mapper 里的 `LIMIT #{offset}, #{size}` 没有静态值，SIA006 判不了，这种情况请把慢日志喂进来。
   - `mobile = ?` 绑的是 Java `Long`，SIA005 看不见参数类型。
   - 相关子查询不展开。SIA006 会降级成只给模板，不敢给出可能改变结果集的改写。
+  - `IN (SELECT ...)` 里的表不参与判定，只看外层。现在每条这样的语句都会写明这一点，不再安静；要覆盖内层得把它们当成独立语句来解析，这一步我们还没做。
+  - `LIMIT ?, ?` 根本判不了深度，因为偏移量是绑定参数。现在会明确写成"分页偏移量是绑定参数，静态看不到大小"，而不是无声消失；真实项目里的解法是把慢日志喂进来，那里的偏移量是数字。
 
 支持的 SQL 子集：每条语句一个 `SELECT` / `INSERT` / `UPDATE` / `DELETE`（内联输入和 `analyze_sql` 支持多条，用 `;` 分隔），ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`（以 `%` 开头的 `LIKE` 会被明确报成无法用索引，而不是被忽略）、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。挤在一起又没写分号的语句会被直接拒绝，不会硬猜：把两条查询当成一条解析，给出的就是另一张表的索引。
 
@@ -237,6 +239,10 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 **只有别人的代码才能暴露的三条。** `DATE_FORMAT()` 出现在 SELECT 列表里也触发了"你的索引用不上"这条规则，而那句 `WHERE` 其实是很干净的区间条件；MyBatis 在运行时拼出来的表名（`device_message_${deviceId}`）拿到了一条 `ADD INDEX`，而那张表根本不存在，迁移文件一执行就报错；两条写法顺序不同、过滤列完全相同的语句给出了两条建议，等于让迁移文件把同一个索引建两遍。前两条靠限定范围解决（表达式只在谓词位置才算问题；运行时表名只给解释、不给 DDL），第三条靠把列集合相同和建议合并、并在存活的那条上写明吞掉了几个查询。三条都有测试钉住。
 
+**只有范围条件的查询被主规则完全忽略。** `WHERE create_time >= ?`，表上没有该列索引，本该建议 `(create_time)`，结果一条都不出。那条"范围之后不能排序"的守卫被写成了"没有排序就不要范围"，于是三个被审计的项目里所有日期/金额范围过滤都是静默通过。范围本身就是一条访问路径，这是靠读别人的代码、而不是读我们自己的测试发现的最大一处漏报。
+
+**括号里的条件组是黑盒。** 括号内的 token 深度是 1，而 AND/OR 拆分只匹配深度 0，所以 `AND (a = 1 OR b = 2)`——MyBatis `<where>` 里最常见的形状——会被当成"无法识别的谓词"整块丢掉。现在会先剥括号并把内部条件提回本层再分类，上面那两种 OR 也因此才可达：同一列的 OR 折叠成 IN 列表，跨列的 OR 只给解释、不给 DDL，因为只建单侧索引就是那条没用的建议。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
@@ -258,7 +264,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-242 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+249 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

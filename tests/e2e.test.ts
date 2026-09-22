@@ -120,8 +120,8 @@ describe("an empty report still says why", () => {
         ].join("\n"),
       );
       const loaded = loadInput(dir, { kind: "mapper" });
-      expect(loaded.notes.map((n) => n.note).join(" ")).toContain("1/2 条语句");
-      expect(loaded.notes.map((n) => n.noteEn).join(" ")).toContain("cannot be resolved statically");
+      expect(loaded.notes.map((n) => n.note).join(" ")).toContain("1 条语句");
+      expect(loaded.notes.map((n) => n.noteEn).join(" ")).toContain("unrecognised predicate skipped");
       // and the analysable statement is still analysed
       expect(loaded.records).toHaveLength(2);
     } finally {

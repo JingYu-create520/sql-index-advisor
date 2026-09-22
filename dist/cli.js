@@ -3395,6 +3395,20 @@ function indexOfPunct(tokens, punct, from = 0, depth = 0) {
   }
   return -1;
 }
+function splitOnWord(tokens, word, baseDepth = tokens[0]?.depth ?? 0) {
+  const groups = [];
+  let current = [];
+  for (const t of tokens) {
+    if (t.depth === baseDepth && isWord(t, word)) {
+      groups.push(current);
+      current = [];
+      continue;
+    }
+    current.push(t);
+  }
+  groups.push(current);
+  return groups.filter((g) => g.length > 0);
+}
 function splitOnAnd(tokens) {
   const groups = [];
   let current = [];
@@ -3870,11 +3884,40 @@ function readWhere(tokens, out, notes) {
     out.columns.push(...classifyPredicate(pred, "where", notes));
   }
 }
+function unwrapConditionGroup(tokens) {
+  if (tokens.length < 3 || tokens[0].value !== "(" || matchingClose(tokens, 0) !== tokens.length - 1) {
+    return void 0;
+  }
+  const base = tokens[0].depth;
+  return tokens.slice(1, -1).map((t) => ({ ...t, depth: t.depth - base - 1 }));
+}
+function classifyOr(branches, scope, notes) {
+  const perBranch = branches.map((b) => classifyPredicate(b, scope, notes)).filter((g) => g.length > 0);
+  if (perBranch.length === 0) return [];
+  const oneColumnPerBranch = perBranch.every((g) => g.length === 1);
+  const columns = perBranch.map((g) => g[0].column);
+  const allEquality = perBranch.every((g) => (g[0].op ?? "=") === "=");
+  if (oneColumnPerBranch && allEquality && new Set(columns).size === 1) {
+    const first = perBranch[0][0];
+    return [{ ...first, scope: "where-in", op: "in", raw: tokensToString(joinOrBranches(branches)) }];
+  }
+  return perBranch.flat().map((ref) => ({ ...ref, scope: "where-or" }));
+}
+function joinOrBranches(branches) {
+  return branches.reduce((acc, b, i) => i === 0 ? [...b] : [...acc, { type: "word", value: "or" }, ...b], []);
+}
 function classifyPredicate(pred, scope, notes) {
   if (pred.length === 0) return [];
-  if (pred[0].value === "(" && matchingClose(pred, 0) === pred.length - 1) {
-    return classifyPredicate(pred.slice(1, -1), scope, notes);
+  const unwrapped = unwrapConditionGroup(pred);
+  if (unwrapped) {
+    const andGroups = splitOnAnd(unwrapped);
+    if (andGroups.length > 1) {
+      return andGroups.flatMap((group) => classifyPredicate(group, scope, notes));
+    }
+    return classifyPredicate(unwrapped, scope, notes);
   }
+  const orBranches = splitOnWord(pred, "or");
+  if (orBranches.length > 1) return classifyOr(orBranches, scope, notes);
   const operator = detectOperator(pred);
   if (!operator) {
     if (!isWord(pred[0], "not", "exists")) {
@@ -3910,7 +3953,10 @@ function classifyPredicate(pred, scope, notes) {
       break;
     }
     case "in": {
-      if (right.some((t) => isWord(t, "select"))) leftRef.op = "in-subquery";
+      if (right.some((t) => isWord(t, "select"))) {
+        leftRef.op = "in-subquery";
+        notes.push(`IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09\uFF1A${truncate(tokensToString(right))}`);
+      }
       break;
     }
     default:
@@ -4590,6 +4636,17 @@ function isDirectory(path) {
     return false;
   }
 }
+function englishReason(reason) {
+  let out = reason;
+  let touched = false;
+  for (const [zh, en] of REASON_PREFIX_EN) {
+    if (out.includes(zh)) {
+      out = out.split(zh).join(en);
+      touched = true;
+    }
+  }
+  return touched ? out : reason;
+}
 function loadInput(source, options = {}) {
   const notes = [];
   const kind = options.kind ?? detectInputKind(source);
@@ -4611,11 +4668,16 @@ function loadInput(source, options = {}) {
     }
     const statements = loadMapperFiles(files);
     const records = mapperStatementsToRecords(statements);
-    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
-    if (unjudged > 0) {
+    const reasons = /* @__PURE__ */ new Map();
+    for (const record2 of records) {
+      for (const reason of new Set(record2.parsed.notes)) {
+        reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+      }
+    }
+    for (const [reason, count] of [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
       notes.push({
-        note: `${unjudged}/${records.length} \u6761\u8BED\u53E5\u7684\u6761\u4EF6\u65E0\u6CD5\u9759\u6001\u8BC6\u522B\uFF08\u591A\u4E3A \${} \u6587\u672C\u66FF\u6362\uFF0C\u4F8B\u5982 where \${criterion.condition}\uFF09\uFF0C\u8FD9\u4E9B\u8BED\u53E5\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u8FD9\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
-        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`
+        note: `${count} \u6761\u8BED\u53E5\uFF1A${reason}\u3002\u8FD9\u90E8\u5206\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
+        noteEn: `${count} statement(s): ${englishReason(reason)}. This part took no rule, which is not a pass.`
       });
     }
     return { kind, notes, records };
@@ -4680,16 +4742,34 @@ function buildRecordsFromSqlText(text, file) {
   flush();
   return records;
 }
-var parseNote;
+var REASON_PREFIX_EN, parseNote;
 var init_input = __esm({
   "src/core/input.ts"() {
     "use strict";
     init_sql();
     init_slowlog();
     init_mapper();
+    REASON_PREFIX_EN = [
+      ["\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped"],
+      ["IN \u5B50\u67E5\u8BE2\u5185\u7684\u8868\u672A\u53C2\u4E0E\u5224\u5B9A", "tables inside the IN subquery took part in no rule"],
+      ["\uFF08\u53EA\u5206\u6790\u5916\u5C42\uFF09", " (outer statement only)"],
+      ["\uFF0C\u5DF2\u8DF3\u8FC7", ", skipped"],
+      ["\u672A\u627E\u5230\u7247\u6BB5", "fragment not found"],
+      ["\u52A8\u6001\u5206\u652F\u7EC4\u5408\u8D85\u8FC7", "dynamic branch combinations exceeded"],
+      ["\u5DF2\u79FB\u9664\u672A\u652F\u6301\u7684\u6807\u7B7E", "unsupported tag removed"],
+      ["\u672A\u627E\u5230\u7247\u6BB5\uFF0C\u5DF2\u8DF3\u8FC7", "fragment not found, skipped"],
+      ["\u4E2D\u7684\u8868\u8FBE\u5F0F\u65E0\u6CD5\u9759\u6001\u5206\u6790", "expression cannot be analysed statically"],
+      ["WHERE \u542B\u9876\u5C42 OR", "WHERE contains a top-level OR"],
+      ["\u6761\u8BED\u53E5", "statement(s)"],
+      ["include refid", "include refid"],
+      // Punctuation last: a note is easier to read in the English report when the
+      // full-width colon and comma inside it are normalised too.
+      ["\uFF1A", ": "],
+      ["\uFF0C", ", "]
+    ];
     parseNote = (text) => ({
       note: text,
-      noteEn: text.replace("\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped").replace("\u5DF2\u8DF3\u8FC7", "skipped")
+      noteEn: englishReason(text)
     });
   }
 });
@@ -8963,6 +9043,7 @@ function bucketByTable(parsed, schema) {
         ordering: [],
         grouping: [],
         wrapped: [],
+        orBranches: [],
         all: [],
         isDriving,
         schemaTable: findTable(schema, name)
@@ -8985,6 +9066,11 @@ function bucketByTable(parsed, schema) {
     if (!table) continue;
     const bucket = ensure(table);
     bucket.all.push(ref);
+    if (ref.scope === "where-or") {
+      bucket.orBranches.push(ref);
+      if (ref.wrapped) bucket.wrapped.push(ref);
+      continue;
+    }
     if (ref.wrapped) {
       if (PREDICATE_SCOPES.has(ref.scope)) bucket.wrapped.push(ref);
       continue;
@@ -9120,7 +9206,7 @@ function candidateColumns(bucket, table) {
   ordered.push(...equality);
   if (orderingUsable) ordered.push(...ordering);
   ordered.push(...inList.slice(0, 1));
-  if (orderingUsable) ordered.push(...range.slice(0, 1));
+  ordered.push(...range.slice(0, 1));
   const names = [];
   for (const ref of ordered) {
     if (!names.includes(ref.column)) names.push(ref.column);
@@ -9271,6 +9357,27 @@ var init_sia001 = __esm({
           if (isDynamicTable(bucket.table)) {
             findings.push(dynamicTableFinding(record2, bucket));
             continue;
+          }
+          if (bucket.orBranches.length > 1) {
+            const columns = [...new Set(bucket.orBranches.map((r) => r.column))];
+            findings.push({
+              rule: RULE_ID,
+              severity: "info",
+              sql: truncateSql(record2.parsed.sql),
+              fingerprint: record2.fingerprint,
+              source: record2.source,
+              queryTime: record2.metrics?.queryTime,
+              rowsExamined: record2.metrics?.rowsExamined ?? record2.maxRowsExamined,
+              occurrences: record2.occurrences,
+              needsSchema: false,
+              needsMetrics: false,
+              table: bucket.table,
+              suggestedDDL: [],
+              message: `\u6761\u4EF6\u91CC\u7684 OR \u8DE8\u4E86\u4E0D\u540C\u5217\uFF08\u5206\u652F\u5217 ${columns.join(", ")}\uFF09\uFF0C\u4E00\u6761\u590D\u5408\u7D22\u5F15\u6551\u4E0D\u4E86\u5B83\uFF1A\u4F18\u5316\u5668\u8981\u4E48\u7ED9\u6BCF\u4E2A\u5206\u652F\u5404\u7528\u4E00\u4E2A\u7D22\u5F15\u505A index merge\uFF0C\u8981\u4E48\u76F4\u63A5\u5168\u626B\u3002\u771F\u6B63\u7684\u51FA\u8DEF\u662F\u4E24\u6761\uFF0C\u7ED9\u6BCF\u4E2A\u5206\u652F\u5217\u5404\u5EFA\u7D22\u5F15\u5E76\u5728 EXPLAIN \u91CC\u786E\u8BA4\u51FA\u73B0 Using union\uFF0C\u6216\u8005\u628A\u8BED\u53E5\u6539\u5199\u6210 UNION ALL \u8BA9\u6BCF\u4E2A\u5206\u652F\u81EA\u5DF1\u8D70\u7D22\u5F15\u3002\u672C\u6761\u4E0D\u7ED9 DDL\uFF0C\u56E0\u4E3A\u53EA\u5EFA\u5355\u4FA7\u7D22\u5F15\u901A\u5E38\u5C31\u662F\u90A3\u6761\u6CA1\u7528\u7684\u5EFA\u8BAE\u3002`,
+              messageEn: `The OR spans different columns (branch columns ${columns.join(
+                ", "
+              )}), which no single composite index serves: the optimizer either merges one index per branch or scans. Two ways out, index each branch column and confirm "Using union" in EXPLAIN, or rewrite as UNION ALL so each branch uses its own index. No DDL here, because indexing one side alone is usually the advice that does nothing.`
+            });
           }
           const candidate = candidateColumns(bucket, table);
           if (candidate.length === 0) continue;
@@ -9932,6 +10039,12 @@ function missingDependency(rule, record2, schema) {
       reasonEn: "no Rows_examined in this input (slow log only)"
     };
   }
+  if (rule.id === "SIA006" && record2.parsed.limit && !record2.parsed.limit.literal) {
+    return {
+      reason: "\u5206\u9875\u504F\u79FB\u91CF\u662F\u7ED1\u5B9A\u53C2\u6570\uFF0C\u9759\u6001\u770B\u4E0D\u5230\u5927\u5C0F",
+      reasonEn: "the OFFSET is a bound parameter, so its size is not visible statically"
+    };
+  }
   if (record2.parsed.notes.some((n) => n.includes("\u89E3\u6790\u5931\u8D25"))) {
     return { reason: "SQL \u89E3\u6790\u5931\u8D25", reasonEn: "statement failed to parse" };
   }
@@ -9980,7 +10093,7 @@ function dropRedundantPrefixes(findings) {
     drop.add(finding);
     kept.coveredFingerprints = [...kept.coveredFingerprints ?? [], finding.fingerprint];
   }
-  for (const narrow of candidates) {
+  for (const narrow of [...candidates].sort((x, y) => x.indexColumns.length - y.indexColumns.length)) {
     for (const wide of candidates) {
       if (narrow === wide || narrow.table !== wide.table) continue;
       const a = narrow.indexColumns;
@@ -9991,7 +10104,8 @@ function dropRedundantPrefixes(findings) {
       drop.add(narrow);
       wide.coveredFingerprints = [
         ...wide.coveredFingerprints ?? [],
-        narrow.fingerprint
+        narrow.fingerprint,
+        ...narrow.coveredFingerprints ?? []
       ];
       break;
     }

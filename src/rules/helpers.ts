@@ -26,6 +26,12 @@ export interface TableBucket {
   range: ColumnRef[];
   ordering: ColumnRef[];
   grouping: ColumnRef[];
+  /**
+   * Equality branches of a top-level OR across different columns. Not a
+   * candidate for one composite index: the optimizer needs an index per branch
+   * (index merge) or the query needs a UNION ALL rewrite.
+   */
+  orBranches: ColumnRef[];
   /** Columns whose predicate has a function or arithmetic on it (SIA004). */
   wrapped: ColumnRef[];
   /** Every column mentioned for this table, in appearance order. */
@@ -65,6 +71,7 @@ export function bucketByTable(parsed: ParsedQuery, schema: Schema | undefined): 
         ordering: [],
         grouping: [],
         wrapped: [],
+        orBranches: [],
         all: [],
         isDriving,
         schemaTable: findTable(schema, name),
@@ -92,6 +99,14 @@ export function bucketByTable(parsed: ParsedQuery, schema: Schema | undefined): 
     const bucket = ensure(table);
     bucket.all.push(ref);
 
+    if (ref.scope === "where-or") {
+      bucket.orBranches.push(ref);
+      // A function on a branch column is still an unusable expression: keep it
+      // visible to SIA004 as well, so `WHERE DATE(x)=? OR y=?` reports the
+      // expression problem and not only the index-merge one.
+      if (ref.wrapped) bucket.wrapped.push(ref);
+      continue;
+    }
     if (ref.wrapped) {
       // "An expression sits on top of this column" only matters where the column
       // is being tested. `DATE_FORMAT(t, '%Y-%m-%d')` in the SELECT list or the

@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.12 — 2026-09-22
+
+Found by auditing three more projects with different styles (`zheng`, `novel-plus`,
+`paicoding`): 421, 277 and 45 statements. This round is about **misses**, not wrong
+advice.
+
+### Fixed
+
+- **Range-only predicates produced no advice at all.** The guard that keeps a sort
+  from being placed behind a range had been written as "drop the range when there
+  is nothing to sort", so `WHERE create_time >= ?` on an un-indexed date column was
+  silent in every one of those projects. A range is an access path on its own.
+- **A bracketed condition group was opaque.** Tokens inside `( ... )` sit at depth
+  1 while the AND/OR splitters match depth 0, so `AND (a = 1 OR b = 2)`, the most
+  common shape in a MyBatis `<where>` block, was dropped as an unrecognised
+  predicate. Groups are now unwrapped and their contents relifted before
+  classification.
+- **An OR across different columns drew an index on one side.** `a = 1 OR b = 2`
+  was classified as `a = 1`, so the tool proposed `(a)` at error severity for an
+  index the optimizer cannot use alone, and `b` disappeared. OR over one column now
+  folds into an IN list (indexable, and it was previously missed entirely); OR over
+  different columns gets an `info` finding with no DDL and the two rewrites that do
+  work (index each branch and confirm `Using union`, or UNION ALL).
+- **Redundancy elimination could lose advice without a trace.** With a chain
+  `(a) -> (a,b) -> (a,b,c)` the narrow suggestion was absorbed by a middle one that
+  was itself dropped, so the survivor claimed to cover one other query when it
+  covered two, and the first one's fingerprint was gone. Candidates are now
+  processed narrowest-first and each drop carries what it had already absorbed.
+- **A bound `LIMIT ?, ?` offset was an unexplained absence.** SIA006 cannot judge
+  pagination depth statically, which is fine, but 50+ statements per project came
+  back with nothing said about why. It is now an attributed skip reason.
+- **The "these statements were not judgeable" note blamed `${}` for everything.**
+  It counted INSERTs and subquery notes under one sentence about text
+  substitution. Notes are now grouped by their actual reason with per-reason
+  counts, in both languages.
+
+### Added
+
+- Tables inside `IN (SELECT ...)` are still not analysed, but they now say so:
+  the parser records the reason per statement and the report carries it out.
+
 ## 0.1.11 — 2026-09-22
 
 ### Fixed

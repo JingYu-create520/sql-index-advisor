@@ -110,6 +110,16 @@ function missingDependency(
       reasonEn: "no Rows_examined in this input (slow log only)",
     };
   }
+  // A paginating query whose offset arrives as a bind parameter is the one shape
+  // SIA006 cannot judge, and in a real project it is the most common one (50
+  // statements in one audited repository). Saying nothing about it reads as "your
+  // pagination is fine", so the reason is attributed per record instead.
+  if (rule.id === "SIA006" && record.parsed.limit && !record.parsed.limit.literal) {
+    return {
+      reason: "分页偏移量是绑定参数，静态看不到大小",
+      reasonEn: "the OFFSET is a bound parameter, so its size is not visible statically",
+    };
+  }
   if (record.parsed.notes.some((n) => n.includes("解析失败"))) {
     return { reason: "SQL 解析失败", reasonEn: "statement failed to parse" };
   }
@@ -194,7 +204,12 @@ function dropRedundantPrefixes(findings: Finding[]): Finding[] {
     kept.coveredFingerprints = [...(kept.coveredFingerprints ?? []), finding.fingerprint];
   }
 
-  for (const narrow of candidates) {
+  // Narrowest first, and carry whatever the narrow one had already absorbed.
+  // Without the order and the carry, a chain like (a) -> (a,b) -> (a,b,c) dropped
+  // the first suggestion into a middle one that was itself about to disappear, so
+  // the surviving index reported "covers 1 other query" when it covered two: the
+  // advice vanished with no trace, which is the thing this pass exists to avoid.
+  for (const narrow of [...candidates].sort((x, y) => x.indexColumns!.length - y.indexColumns!.length)) {
     for (const wide of candidates) {
       if (narrow === wide || narrow.table !== wide.table) continue;
       const a = narrow.indexColumns!;
@@ -206,6 +221,7 @@ function dropRedundantPrefixes(findings: Finding[]): Finding[] {
       wide.coveredFingerprints = [
         ...(wide.coveredFingerprints ?? []),
         narrow.fingerprint,
+        ...(narrow.coveredFingerprints ?? []),
       ];
       break;
     }

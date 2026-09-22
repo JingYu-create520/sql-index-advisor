@@ -37,6 +37,8 @@ export type ColumnRefScope =
   | "where-in"
   | "where-range"
   | "where-like-prefix"
+  /** Equality branches of a top-level OR over different columns. */
+  | "where-or"
   | "where-null"
   | "join-on"
   | "group-by"

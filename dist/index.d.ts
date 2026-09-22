@@ -22,7 +22,9 @@ interface QueryMetrics {
     rowsSent?: number;
     rowsExamined?: number;
 }
-type ColumnRefScope = "where-eq" | "where-in" | "where-range" | "where-like-prefix" | "where-null" | "join-on" | "group-by" | "order-by" | "select" | "set";
+type ColumnRefScope = "where-eq" | "where-in" | "where-range" | "where-like-prefix"
+/** Equality branches of a top-level OR over different columns. */
+ | "where-or" | "where-null" | "join-on" | "group-by" | "order-by" | "select" | "set";
 /** A column reference with the role it plays in the statement. */
 interface ColumnRef {
     /** Raw text as it appears, e.g. `o.user_id` or `create_time`. */
