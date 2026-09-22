@@ -235,6 +235,8 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 最后这两条是拿**别人的代码**跑出来的，不是自己的用例：`macrozheng/mall`（104 个手写 MyBatis DAO 文件，外加它自己的生产库结构导进真实 MySQL）。由写解析器的那颗脑子写的 fixture，只会重复这颗脑子的假设。
 
+**只有别人的代码才能暴露的三条。** `DATE_FORMAT()` 出现在 SELECT 列表里也触发了"你的索引用不上"这条规则，而那句 `WHERE` 其实是很干净的区间条件；MyBatis 在运行时拼出来的表名（`device_message_${deviceId}`）拿到了一条 `ADD INDEX`，而那张表根本不存在，迁移文件一执行就报错；两条写法顺序不同、过滤列完全相同的语句给出了两条建议，等于让迁移文件把同一个索引建两遍。前两条靠限定范围解决（表达式只在谓词位置才算问题；运行时表名只给解释、不给 DDL），第三条靠把列集合相同和建议合并、并在存活的那条上写明吞掉了几个查询。三条都有测试钉住。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
