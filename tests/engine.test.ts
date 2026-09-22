@@ -137,6 +137,30 @@ describe("analyze: robustness", () => {
     expect(result.findings.flatMap((f) => f.suggestedDDL)).toHaveLength(2);
   });
 
+  /**
+   * Found on a real corpus: two statements filtering the same columns in a
+   * different written order produced two suggestions whose DDL differed only by
+   * permutation, and the migration file told someone to build both.
+   */
+  it("collapses the same column set written in a different order", () => {
+    const result = analyze([
+      record("SELECT id FROM stock WHERE sku_id = 1 AND warehouse_id = 2"),
+      record("SELECT id FROM stock WHERE warehouse_id = 2 AND sku_id = 1"),
+    ]);
+    const suggestions = result.findings.filter((f) => f.rule === "SIA001");
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]?.coveredFingerprints).toHaveLength(1);
+    expect(suggestions[0]?.message).toContain("无需重复建");
+  });
+
+  it("an all-flag composite is capped too", () => {
+    const result = analyze([record("UPDATE stock SET memo = 'x' WHERE synced = 0 AND enabled = 1")]);
+    const finding = result.findings.find((f) => f.rule === "SIA001");
+    expect(finding?.indexColumns).toEqual(["synced", "enabled"]);
+    expect(finding?.lowCardinalityRisk).toBe(true);
+    expect(finding?.severity).toBe("info");
+  });
+
   it("never puts a boolean flag column above info and says why", () => {
     const result = analyze([record("UPDATE stock SET synced = 1 WHERE synced = 0")]);
     const finding = result.findings.find((f) => f.rule === "SIA001");

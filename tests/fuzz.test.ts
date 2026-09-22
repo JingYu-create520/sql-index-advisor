@@ -257,6 +257,19 @@ describe("fuzz: emitted advice obeys its own contract", () => {
     }
   });
 
+  it("never proposes the same set of columns twice in a different order", () => {
+    const seen = new Map<string, string>();
+    for (const f of result.findings.filter((x) => (x.indexColumns?.length ?? 0) > 0)) {
+      const key = [f.table, [...f.indexColumns!].sort().join(",")].join("::");
+      const previous = seen.get(key);
+      expect(
+        previous,
+        `${f.indexColumns!.join(",")} on ${f.table} repeats ${previous ?? ""} as a permutation`,
+      ).toBeUndefined();
+      seen.set(key, f.indexColumns!.join(","));
+    }
+  });
+
   it("reports every finding with the fields a reviewer needs", () => {
     for (const f of result.findings) {
       expect(["error", "warn", "info"]).toContain(f.severity);

@@ -153,6 +153,39 @@ function dropRedundantPrefixes(findings: Finding[]): Finding[] {
   const candidates = findings.filter((f) => (f.indexColumns?.length ?? 0) > 0);
   const drop = new Set<Finding>();
 
+  /**
+   * Two statements that filter the same columns in a different written order need
+   * one index, not two. Without this the migration file carried both
+   * `(deleted, biz_type, post_owner_user_id, pre_owner_user_id)` and the same set
+   * with the last two swapped, because the fingerprints differ and the dedup key
+   * includes the fingerprint. Findings arrive benefit-ordered, so keeping the
+   * first representative keeps the more expensive query's shape.
+   */
+  /**
+   * Two statements filtering the same columns in a different written order need
+   * one index, not two, and the same set can also arrive from two different rules
+   * (a missing index and a covering-index opportunity on the same table). Without
+   * this the migration file carried both `(deleted, biz_type, post_owner_user_id,
+   * pre_owner_user_id)` and the same set with the last two swapped, because the
+   * fingerprints differ and the dedup key includes the fingerprint. Findings
+   * arrive benefit-ordered, so the first representative keeps its shape.
+   *
+   * A prefix index is excluded: `KEY (remark)` and `KEY (remark(64))` cover
+   * different things, and collapsing them would delete a real option.
+   */
+  const byColumnSet = new Map<string, Finding>();
+  for (const finding of candidates) {
+    if (finding.suggestedDDL.some((ddl) => /\(\s*\w+\s*\(\s*\d+\s*\)\s*\)/.test(ddl))) continue;
+    const key = [finding.table ?? "", [...finding.indexColumns!].sort().join(",")].join("::");
+    const kept = byColumnSet.get(key);
+    if (!kept) {
+      byColumnSet.set(key, finding);
+      continue;
+    }
+    drop.add(finding);
+    kept.coveredFingerprints = [...(kept.coveredFingerprints ?? []), finding.fingerprint];
+  }
+
   for (const narrow of candidates) {
     for (const wide of candidates) {
       if (narrow === wide || narrow.table !== wide.table) continue;

@@ -5,6 +5,7 @@
 
 import type {
   ColumnRef,
+  ColumnRefScope,
   ParsedQuery,
   RuleOptions,
   Schema,
@@ -34,6 +35,16 @@ export interface TableBucket {
 }
 
 const EQ_OPS = new Set(["=", "in", "in-subquery", "like-prefix"]);
+
+/** Scopes where a column is being tested, as opposed to produced or grouped. */
+const PREDICATE_SCOPES = new Set<ColumnRefScope>([
+  "where-eq",
+  "where-in",
+  "where-range",
+  "where-like-prefix",
+  "where-null",
+  "join-on",
+]);
 const RANGE_OPS = new Set([">", "<", ">=", "<=", "!=", "<>", "between", "like-middle"]);
 
 /** Group every parsed reference by the physical table it belongs to. */
@@ -82,7 +93,12 @@ export function bucketByTable(parsed: ParsedQuery, schema: Schema | undefined): 
     bucket.all.push(ref);
 
     if (ref.wrapped) {
-      bucket.wrapped.push(ref);
+      // "An expression sits on top of this column" only matters where the column
+      // is being tested. `DATE_FORMAT(t, '%Y-%m-%d')` in the SELECT list or the
+      // GROUP BY is a projection, and the WHERE clause on the same statement can
+      // be perfectly sargable; flagging those told users their usable index was
+      // unusable. `wrapped` therefore means "wrapped inside a predicate".
+      if (PREDICATE_SCOPES.has(ref.scope)) bucket.wrapped.push(ref);
       continue;
     }
     if (ref.scope === "order-by") {
@@ -182,6 +198,17 @@ export function bytesPerChar(table: SchemaTable | undefined): number {
  * version budget silently overriding everything.
  */
 const PRACTICAL_MAX_PREFIX_CHARS = 128;
+
+/**
+ * True for a table name that only exists at runtime. MyBatis writes
+ * \`device_message_\${deviceId}\` and sharding suffixes, which collapse to a
+ * placeholder here, so the statement really means "some table whose name the
+ * caller builds". There is no index to name on such a table, and the DDL fails
+ * on the server the moment anyone runs the migration file.
+ */
+export function isDynamicTable(name: string): boolean {
+  return /[?${}]/.test(name) || /_$/.test(name);
+}
 
 /** A prefix length in characters that keeps a string column inside the key budget. */
 export function suggestPrefixChars(

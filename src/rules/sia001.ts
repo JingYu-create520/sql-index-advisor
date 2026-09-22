@@ -19,6 +19,7 @@ import {
   bucketByTable,
   dedupeColumns,
   indexName,
+  isDynamicTable,
   oversizedColumns,
   truncateSql,
   type TableBucket,
@@ -42,6 +43,10 @@ export const sia001: Rule = {
 
     for (const bucket of buckets) {
       const table = findTable(schema, bucket.table);
+      if (isDynamicTable(bucket.table)) {
+        findings.push(dynamicTableFinding(record, bucket));
+        continue;
+      }
       const candidate = candidateColumns(bucket, table);
       if (candidate.length === 0) continue;
 
@@ -89,13 +94,16 @@ export const sia001: Rule = {
         lowCardinalityRisk,
         suggestedDDL: [ddl],
         message: [
-          buildMessage(bucket, usable, dropped, table ? prefixHit : undefined),
+          buildMessage(bucket, usable, dropped, table ? prefixHit : undefined, !!table, !!schema),
           ...(lowCardinalityRisk ? [FLAG_CAUTION] : []),
         ].join(" "),
         messageEn: [
-          buildMessageEn(bucket, usable, dropped, table ? prefixHit : undefined, !!table),
+          buildMessageEn(bucket, usable, dropped, table ? prefixHit : undefined, !!table, !!schema),
           ...(lowCardinalityRisk
-            ? ["Low-cardinality column: check its distinct-value ratio before creating it."]
+            ? [
+                "Every column here is a boolean or flag-shaped one, so even the combination may separate almost nothing:" +
+                  " check COUNT(DISTINCT ...) / COUNT(*) before creating it.",
+              ]
             : []),
         ].join(" "),
       });
@@ -261,15 +269,38 @@ function equalityAlreadyIndexed(
 const FLAG_NAMES = /^(is_|has_|can_|enabled?|disabled|deleted?|synced?|verified|activated?|expired?|valid|invalid|active|inactive|state|status|type|kind|flag)$/;
 
 const FLAG_CAUTION =
-  "注意：这是单列布尔/标志位，区分度可能极低，优化器未必会选它。先跑 " +
-  "SELECT COUNT(DISTINCT 列)/COUNT(*) FROM 表; 确认比值足够小再建。";
+  "注意：这里的列全是布尔/标志位类型，组合起来的区分度也可能极低，优化器未必会选它。先跑 " +
+  "SELECT COUNT(DISTINCT 列1, 列2)/COUNT(*) FROM 表; 确认比值足够小再建。";
 
 function isFlagColumn(usable: string[], table: SchemaTable | undefined): boolean {
-  if (usable.length !== 1) return false;
-  const name = usable[0]!;
-  const column = table?.columns.find((c) => c.name === name);
-  if (column && ["tinyint", "bit", "boolean", "bool"].includes(column.type)) return true;
-  return FLAG_NAMES.test(name);
+  if (usable.length === 0) return false;
+  const flagLike = usable.every((name) => {
+    const column = table?.columns.find((c) => c.name === name);
+    if (column && ["tinyint", "bit", "boolean", "bool"].includes(column.type)) return true;
+    return FLAG_NAMES.test(name);
+  });
+  return flagLike;
+}
+
+/**
+ * A statement whose table name is assembled at runtime cannot receive an index
+ * recommendation, but saying nothing would read as "this query is fine". Report it
+ * as info with no DDL and the reason attached.
+ */
+function dynamicTableFinding(record: RuleContext["record"], bucket: TableBucket): Finding {
+  return {
+    rule: RULE_ID,
+    severity: "info",
+    sql: truncateSql(record.parsed.sql),
+    fingerprint: record.fingerprint,
+    source: record.source,
+    needsSchema: false,
+    needsMetrics: false,
+    table: bucket.table,
+    suggestedDDL: [],
+    message: `表名 \`${bucket.table}\` 是运行时拼出来的（MyBatis 的动态表名或分表后缀），无法为它指定某一张真实表，也就给不出可执行的 DDL。要体检这类表，请把实际表名传进来（\`sia query "..."\`）或者按物理表分别分析。`,
+    messageEn: `The table name \`${bucket.table}\` is built at runtime (a MyBatis dynamic table name or a sharding suffix), so no single physical table can be named and no runnable DDL exists for it. Analyse the concrete table names instead, e.g. with \`sia query "..."\`.`,
+  };
 }
 
 function buildMessage(
@@ -277,6 +308,8 @@ function buildMessage(
   usable: string[],
   dropped: string[],
   prefixHit: { name: string; columns: string[] } | undefined,
+  hasTable: boolean,
+  schemaSupplied: boolean,
 ): string {
   const parts = [
     `${bucket.table} 上按当前条件访问缺少可用索引，建议按「等值 -> 排序 -> 范围」顺序建 (${usable.join(", ")})。`,
@@ -289,6 +322,13 @@ function buildMessage(
   }
   if (dropped.length > 0) {
     parts.push(`列 ${dropped.join(", ")} 单列过长，未纳入本次建议，请见 SIA002 前缀索引方案。`);
+  }
+  if (!hasTable) {
+    parts.push(
+      schemaSupplied
+        ? `注意：\`${bucket.table}\` 不在你给的 schema.json 的表清单里，所以现有索引无从判断，这条只是候选；请确认库名与导出是否对得上。`
+        : `未提供 --schema，无法确认是否已有索引覆盖，请补 \`--schema\` 再看。`,
+    );
   }
   return parts.join(" ");
 }
@@ -305,13 +345,18 @@ function buildMessageEn(
   dropped: string[],
   prefixHit: { name: string; columns: string[] } | undefined,
   hasSchema: boolean,
+  schemaSupplied: boolean,
 ): string {
   const parts = [
     `Candidate index for ${bucket.table} (${usable.join(", ")}), ordered equality -> group/order -> range; ` +
       `only a contiguous run from the first column can be used.`,
   ];
   if (!hasSchema) {
-    parts.push("Pass --schema to confirm that nothing already covers this access path.");
+    parts.push(
+      schemaSupplied
+        ? `\`${bucket.table}\` is not among the tables in the schema.json you passed, so its existing indexes cannot be checked; confirm the database and the export match.`
+        : "Pass --schema to confirm that nothing already covers this access path.",
+    );
   } else if (prefixHit) {
     parts.push(
       `Existing index ${prefixHit.name}(${prefixHit.columns.join(", ")}) covers only a left prefix of the proposed one; ` +

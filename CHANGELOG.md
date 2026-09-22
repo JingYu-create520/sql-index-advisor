@@ -4,6 +4,50 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.6 — 2026-09-22
+
+Six findings from two sources: running the tool over other people's projects
+(`YunaiV/ruoyi-vue-pro`, 95 suggestions over 111 statements; `xubinux/xbin-store`,
+15 tables) and the repository's own Action reporting on its own pull request.
+
+### Fixed
+
+- **`npm i github:JingYu-create520/sql-index-advisor` could fail on a clean
+  environment.** npm prepares a git dependency inside a throwaway clone, and there
+  `prepare` ran `tsup`, which was not installed: `sh: 1: tsup: not found`, exit 127,
+  install aborted. This is the command in the README, and it was caught by the
+  repository's own review workflow, not by any local test. The built bundle is now
+  committed, `prepare` only rebuilds when the toolchain is actually present, and CI
+  fails if `dist/` drifts from `src/`.
+- **SIA004 reported functions that were never in the WHERE.** A
+  `DATE_FORMAT(feedback_time, '%Y-%m-%d')` in the projection or the GROUP BY, with a
+  perfectly sargable range in the WHERE, was answered with "no index on that column
+  can serve this predicate". An expression only matters where the column is being
+  tested.
+- **DDL for a table that does not exist as named.** `device_message_${deviceId}`
+  collapsed to `device_message_?`, and the emitted migration file failed on import
+  with `Table 'demo.crm_business' doesn't exist`. A runtime-built table name now
+  gets an explanation with no DDL, because there is no single physical table to
+  index.
+- **"Pass --schema" was shown to people who had passed one.** When the table was
+  simply not in the supplied `schema.json`, the advice was right and the sentence
+  beside it was wrong. The two cases read differently now, in both languages.
+- **The same column set could be proposed twice in a different order.**
+  `(deleted, biz_type, post_owner_user_id, pre_owner_user_id)` and the same set with
+  the last two swapped, from two statements, into one migration file. They are one
+  index; the survivor says how many other access paths it serves.
+- **A composite of nothing but flag columns was presented as confident advice.**
+  `(user_type, deleted)` on a real table was `error` severity with "no existing
+  index serves this access path". Six combinations over a large table is not an
+  access path, so an all-flag suggestion is capped at `info` with the ratio query,
+  the same treatment a single flag column already got.
+
+### Added
+
+- Two invariants over the generated corpus: no two suggestions share a column set
+  in a different order, and no suggestion that is a left prefix of another. The
+  first one failed on the first run, which is why it is in the list.
+
 ## 0.1.5 — 2026-09-22
 
 ### Fixed
