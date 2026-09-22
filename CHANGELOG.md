@@ -95,7 +95,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.1.0 — 2026-09-20
 
-First release. Core premise: index advice you can verify: every finding carries
+First release. Core premise: index advice you can verify. Every finding carries
 a rule ID, the evidence SQL, and a DDL a human can read before running it.
 
 ### Added
@@ -188,3 +188,12 @@ and no filesort**. Verified on 8.0 only; 5.7 remains uninspected.
   `#{}` is invisible statically.
 - Statements outside the documented SQL subset are skipped with an `info` note
   rather than guessed at.
+
+### Tag note
+
+The entry above describes the state of the tool when the milestones finished, not
+the tree inside the `v0.1.0` tag. That tag was cut a day earlier, at the commit
+where installation moved to GitHub: it has 17 test files and 186 cases, and it
+does not contain `tests/fuzz.test.ts`, the README screenshot, or `--lang` on
+`--emit-sql`. Those landed afterwards and are in the `0.1.1` and `0.1.2` trees.
+Pin `v0.1.2`, or use the floating `v0`, rather than `v0.1.0`.
