@@ -23426,6 +23426,7 @@ function analyze(records, options = {}) {
     analysed: records.length,
     skipped: [...skipCounts.entries()].map(([id, v]) => ({ id, reason: v.reason, reasonEn: v.reasonEn, count: v.count })).sort((a, b) => b.count - a.count),
     errors,
+    notes: [],
     options: opts
   };
 }
@@ -23541,9 +23542,24 @@ function dedup(findings) {
   return [...seen.values()];
 }
 
+// src/version.ts
+import { readFileSync as readFileSync2 } from "fs";
+import { fileURLToPath } from "url";
+function readVersion() {
+  for (const rel of ["../package.json", "../../package.json"]) {
+    try {
+      const pkg = JSON.parse(readFileSync2(fileURLToPath(new URL(rel, import.meta.url)), "utf8"));
+      if (pkg.name === "sql-index-advisor" && typeof pkg.version === "string") return pkg.version;
+    } catch {
+    }
+  }
+  return "0.0.0-unknown";
+}
+var VERSION = readVersion();
+
 // src/report/json.ts
 var REPORT_VERSION = 1;
-function buildJsonReport(result, source, toolVersion = "0.1.0") {
+function buildJsonReport(result, source, toolVersion = VERSION) {
   const bySeverity = { error: 0, warn: 0, info: 0 };
   for (const finding of result.findings) bySeverity[finding.severity] += 1;
   return {
@@ -23558,6 +23574,7 @@ function buildJsonReport(result, source, toolVersion = "0.1.0") {
     options: result.options,
     rules: ruleCatalogue(),
     skipped: result.skipped,
+    notes: result.notes,
     errors: result.errors,
     findings: result.findings
   };
@@ -23778,7 +23795,7 @@ function aggregate(events, file, ignoredEvents) {
 }
 
 // src/parsers/mapper.ts
-import { readFileSync as readFileSync2, readdirSync, statSync } from "fs";
+import { readFileSync as readFileSync3, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
 var MAX_VARIANTS = 10;
 var STATEMENT_TAGS = ["select", "insert", "update", "delete"];
@@ -23989,7 +24006,7 @@ function escapeRe(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function readMapperFile(path) {
-  return readFileSync2(path, "utf8").replace(/^﻿/, "");
+  return readFileSync3(path, "utf8").replace(/^﻿/, "");
 }
 function discoverMapperFiles(input) {
   const abs = resolve(input);
@@ -24005,7 +24022,7 @@ function discoverMapperFiles(input) {
       } else if (entry.name.toLowerCase().endsWith(".xml")) {
         let head = "";
         try {
-          head = readFileSync2(full, "utf8").slice(0, 4096);
+          head = readFileSync3(full, "utf8").slice(0, 4096);
         } catch {
           continue;
         }
@@ -24070,7 +24087,7 @@ function mapperStatementsToRecords(statements) {
 }
 
 // src/core/input.ts
-import { readFileSync as readFileSync3, existsSync, statSync as statSync2 } from "fs";
+import { readFileSync as readFileSync4, existsSync, statSync as statSync2 } from "fs";
 import { basename } from "path";
 function detectInputKind(pathOrText) {
   const name = basename(pathOrText).toLowerCase();
@@ -24088,35 +24105,64 @@ function isDirectory(path) {
     return false;
   }
 }
+var parseNote = (text) => ({
+  note: text,
+  noteEn: text.replace("\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped").replace("\u5DF2\u8DF3\u8FC7", "skipped")
+});
 function loadInput(source, options = {}) {
   const notes = [];
   const kind = options.kind ?? detectInputKind(source);
   if (options.inline || !options.kind && !existsSync(source)) {
     const records = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes);
+      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql", occurrences: 1 };
     });
     return { kind: "sql", notes, records };
   }
   if (kind === "mapper") {
     const files = discoverMapperFiles(source);
-    if (files.length === 0) notes.push(`\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6`);
+    if (files.length === 0) {
+      notes.push({
+        note: `\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6\uFF0C\u8FD9\u6B21\u6CA1\u6709\u5206\u6790\u4EFB\u4F55\u8BED\u53E5\u3002`,
+        noteEn: `No <mapper> XML files under ${source}; nothing was analysed.`
+      });
+    }
     const statements = loadMapperFiles(files);
-    return { kind, notes, records: mapperStatementsToRecords(statements) };
+    const records = mapperStatementsToRecords(statements);
+    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
+    if (unjudged > 0) {
+      notes.push({
+        note: `${unjudged}/${records.length} \u6761\u8BED\u53E5\u7684\u6761\u4EF6\u65E0\u6CD5\u9759\u6001\u8BC6\u522B\uFF08\u591A\u4E3A \${} \u6587\u672C\u66FF\u6362\uFF0C\u4F8B\u5982 where \${criterion.condition}\uFF09\uFF0C\u8FD9\u4E9B\u8BED\u53E5\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u8FD9\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
+        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`
+      });
+    }
+    return { kind, notes, records };
   }
   if (kind === "schema") {
-    return { kind, records: [], notes: [`${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165`] };
+    return {
+      kind,
+      records: [],
+      notes: [
+        {
+          note: `${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165\uFF0C\u800C\u4E0D\u662F\u5F53\u6210\u67E5\u8BE2\u6765\u5206\u6790\u3002`,
+          noteEn: `${source} is a schema file: pass it with --schema instead of analysing it as queries.`
+        }
+      ]
+    };
   }
-  const text = readFileSync3(source, "utf8");
+  const text = readFileSync4(source, "utf8");
   const result = kind === "sql" && !isDirectory(source) && source.toLowerCase().endsWith(".sql") ? { records: buildRecordsFromSqlText(text, source), ignoredEvents: 0, totalEvents: 0 } : (() => {
     const slow = parseSlowLog(text, source);
     return { records: slow.records, ignoredEvents: slow.ignoredEvents, totalEvents: slow.totalEvents };
   })();
   if (kind === "slowlog" && result.ignoredEvents > 0) {
-    notes.push(`\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`);
+    notes.push({
+      note: `\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`,
+      noteEn: `${result.ignoredEvents} event block(s) were ignored as unrecognised`
+    });
   }
-  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(reason);
+  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(parseNote(reason));
   return { kind: kind === "sql" ? "sql" : "slowlog", records: result.records, notes };
 }
 function buildRecordsFromSqlText(text, file) {
@@ -24153,21 +24199,6 @@ function buildRecordsFromSqlText(text, file) {
   flush();
   return records;
 }
-
-// src/version.ts
-import { readFileSync as readFileSync4 } from "fs";
-import { fileURLToPath } from "url";
-function readVersion() {
-  for (const rel of ["../package.json", "../../package.json"]) {
-    try {
-      const pkg = JSON.parse(readFileSync4(fileURLToPath(new URL(rel, import.meta.url)), "utf8"));
-      if (pkg.name === "sql-index-advisor" && typeof pkg.version === "string") return pkg.version;
-    } catch {
-    }
-  }
-  return "0.0.0-unknown";
-}
-var VERSION = readVersion();
 
 // src/mcp/tools.ts
 var INSTRUCTIONS = [
@@ -24267,6 +24298,7 @@ function analyzeMapperTool(args) {
   if (error2) return failure(error2);
   let records;
   let source;
+  let notes = [];
   if (args.xml) {
     records = mapperStatementsToRecords(parseMapperText(args.xml, "inline-mapper.xml"));
     source = "inline-mapper.xml";
@@ -24274,11 +24306,13 @@ function analyzeMapperTool(args) {
     const loaded = loadInput(args.path, { kind: "mapper" });
     records = loaded.records;
     source = args.path;
+    notes = loaded.notes;
   }
   if (records.length === 0) return failure("\u6CA1\u6709\u89E3\u6790\u51FA\u4EFB\u4F55 mapper \u8BED\u53E5\u3002");
   const usable = analysableRecords(records);
   if (usable.length === 0) return failure(NOTHING_ANALYSABLE);
-  return toolResult(source, analyze(usable, { schema, ...ruleOptions(args) }), {
+  const result = { ...analyze(usable, { schema, ...ruleOptions(args) }), notes };
+  return toolResult(source, result, {
     emitSql: args.emitSql,
     top: args.top
   });

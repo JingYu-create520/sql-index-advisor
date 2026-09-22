@@ -212,6 +212,7 @@ export function analyzeMapperTool(args: AnalyzeMapperArgs): ToolResult {
 
   let records;
   let source: string;
+  let notes: AnalysisResult["notes"] = [];
   if (args.xml) {
     records = mapperStatementsToRecords(parseMapperText(args.xml, "inline-mapper.xml"));
     source = "inline-mapper.xml";
@@ -219,11 +220,16 @@ export function analyzeMapperTool(args: AnalyzeMapperArgs): ToolResult {
     const loaded = loadInput(args.path!, { kind: "mapper" });
     records = loaded.records;
     source = args.path!;
+    notes = loaded.notes;
   }
   if (records.length === 0) return failure("没有解析出任何 mapper 语句。");
   const usable = analysableRecords(records);
   if (usable.length === 0) return failure(NOTHING_ANALYSABLE);
-  return toolResult(source, analyze(usable, { schema, ...ruleOptions(args) }), {
+  // An agent asking through MCP deserves the same caveats a human reads in the
+  // terminal: a directory of runtime-built predicates must not come back as a
+  // clean result just because the renderer is different.
+  const result = { ...analyze(usable, { schema, ...ruleOptions(args) }), notes };
+  return toolResult(source, result, {
     emitSql: args.emitSql,
     top: args.top,
   });

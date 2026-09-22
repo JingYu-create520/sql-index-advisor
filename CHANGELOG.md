@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.10 — 2026-09-22
+
+### Fixed
+
+- **An empty report could claim a pass.** The loader already knew things worth
+  saying: the directory holds no `<mapper>` XML at all, a statement's predicate is
+  a `${}` text substitution that only exists at runtime, event blocks were ignored
+  while parsing, a schema file was handed over as if it were a query. Those notes
+  were computed and then dropped, so `sia mapper <wrong path>` printed
+  `✓ nothing to report`. Notes are now part of the analysis result, printed by the
+  terminal (with a distinct wording: no green check when the run learned nothing),
+  carried in the JSON report, and returned through the MCP tools. A real project
+  with 205 generated Example-criteria statements now says so instead of going quiet.
+- **The README showed an excerpt as if it were the whole output.** The collapsible
+  text block omits the per-finding `why` paragraphs; it now says so. The screenshot
+  had also drifted from current output (it was captured before the SIA004 wording
+  changed) and has been regenerated from a live run.
+
 ## 0.1.9 — 2026-09-22
 
 ### Fixed

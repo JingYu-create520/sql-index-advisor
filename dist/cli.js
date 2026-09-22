@@ -4596,19 +4596,41 @@ function loadInput(source, options = {}) {
   if (options.inline || !options.kind && !existsSync(source)) {
     const records = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes);
+      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql", occurrences: 1 };
     });
     return { kind: "sql", notes, records };
   }
   if (kind === "mapper") {
     const files = discoverMapperFiles(source);
-    if (files.length === 0) notes.push(`\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6`);
+    if (files.length === 0) {
+      notes.push({
+        note: `\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6\uFF0C\u8FD9\u6B21\u6CA1\u6709\u5206\u6790\u4EFB\u4F55\u8BED\u53E5\u3002`,
+        noteEn: `No <mapper> XML files under ${source}; nothing was analysed.`
+      });
+    }
     const statements = loadMapperFiles(files);
-    return { kind, notes, records: mapperStatementsToRecords(statements) };
+    const records = mapperStatementsToRecords(statements);
+    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
+    if (unjudged > 0) {
+      notes.push({
+        note: `${unjudged}/${records.length} \u6761\u8BED\u53E5\u7684\u6761\u4EF6\u65E0\u6CD5\u9759\u6001\u8BC6\u522B\uFF08\u591A\u4E3A \${} \u6587\u672C\u66FF\u6362\uFF0C\u4F8B\u5982 where \${criterion.condition}\uFF09\uFF0C\u8FD9\u4E9B\u8BED\u53E5\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u8FD9\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
+        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`
+      });
+    }
+    return { kind, notes, records };
   }
   if (kind === "schema") {
-    return { kind, records: [], notes: [`${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165`] };
+    return {
+      kind,
+      records: [],
+      notes: [
+        {
+          note: `${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165\uFF0C\u800C\u4E0D\u662F\u5F53\u6210\u67E5\u8BE2\u6765\u5206\u6790\u3002`,
+          noteEn: `${source} is a schema file: pass it with --schema instead of analysing it as queries.`
+        }
+      ]
+    };
   }
   const text = readFileSync2(source, "utf8");
   const result = kind === "sql" && !isDirectory(source) && source.toLowerCase().endsWith(".sql") ? { records: buildRecordsFromSqlText(text, source), ignoredEvents: 0, totalEvents: 0 } : (() => {
@@ -4616,9 +4638,12 @@ function loadInput(source, options = {}) {
     return { records: slow.records, ignoredEvents: slow.ignoredEvents, totalEvents: slow.totalEvents };
   })();
   if (kind === "slowlog" && result.ignoredEvents > 0) {
-    notes.push(`\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`);
+    notes.push({
+      note: `\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`,
+      noteEn: `${result.ignoredEvents} event block(s) were ignored as unrecognised`
+    });
   }
-  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(reason);
+  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(parseNote(reason));
   return { kind: kind === "sql" ? "sql" : "slowlog", records: result.records, notes };
 }
 function buildRecordsFromSqlText(text, file) {
@@ -4655,12 +4680,17 @@ function buildRecordsFromSqlText(text, file) {
   flush();
   return records;
 }
+var parseNote;
 var init_input = __esm({
   "src/core/input.ts"() {
     "use strict";
     init_sql();
     init_slowlog();
     init_mapper();
+    parseNote = (text) => ({
+      note: text,
+      noteEn: text.replace("\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped").replace("\u5DF2\u8DF3\u8FC7", "skipped")
+    });
   }
 });
 
@@ -9881,6 +9911,7 @@ function analyze(records, options = {}) {
     analysed: records.length,
     skipped: [...skipCounts.entries()].map(([id, v]) => ({ id, reason: v.reason, reasonEn: v.reasonEn, count: v.count })).sort((a, b) => b.count - a.count),
     errors,
+    notes: [],
     options: opts
   };
 }
@@ -10003,8 +10034,29 @@ var init_engine = __esm({
   }
 });
 
+// src/version.ts
+import { readFileSync as readFileSync4 } from "fs";
+import { fileURLToPath } from "url";
+function readVersion() {
+  for (const rel of ["../package.json", "../../package.json"]) {
+    try {
+      const pkg = JSON.parse(readFileSync4(fileURLToPath(new URL(rel, import.meta.url)), "utf8"));
+      if (pkg.name === "sql-index-advisor" && typeof pkg.version === "string") return pkg.version;
+    } catch {
+    }
+  }
+  return "0.0.0-unknown";
+}
+var VERSION;
+var init_version = __esm({
+  "src/version.ts"() {
+    "use strict";
+    VERSION = readVersion();
+  }
+});
+
 // src/report/json.ts
-function buildJsonReport(result, source, toolVersion = "0.1.0") {
+function buildJsonReport(result, source, toolVersion = VERSION) {
   const bySeverity = { error: 0, warn: 0, info: 0 };
   for (const finding of result.findings) bySeverity[finding.severity] += 1;
   return {
@@ -10019,6 +10071,7 @@ function buildJsonReport(result, source, toolVersion = "0.1.0") {
     options: result.options,
     rules: ruleCatalogue(),
     skipped: result.skipped,
+    notes: result.notes,
     errors: result.errors,
     findings: result.findings
   };
@@ -10032,6 +10085,7 @@ var init_json = __esm({
   "src/report/json.ts"() {
     "use strict";
     init_registry();
+    init_version();
     REPORT_VERSION = 1;
   }
 });
@@ -10124,27 +10178,6 @@ var init_migration = __esm({
         review: "-- Generated by sql-index-advisor (SIA); review before running."
       }
     };
-  }
-});
-
-// src/version.ts
-import { readFileSync as readFileSync4 } from "fs";
-import { fileURLToPath } from "url";
-function readVersion() {
-  for (const rel of ["../package.json", "../../package.json"]) {
-    try {
-      const pkg = JSON.parse(readFileSync4(fileURLToPath(new URL(rel, import.meta.url)), "utf8"));
-      if (pkg.name === "sql-index-advisor" && typeof pkg.version === "string") return pkg.version;
-    } catch {
-    }
-  }
-  return "0.0.0-unknown";
-}
-var VERSION;
-var init_version = __esm({
-  "src/version.ts"() {
-    "use strict";
-    VERSION = readVersion();
   }
 });
 
@@ -28348,6 +28381,7 @@ function analyzeMapperTool(args) {
   if (error2) return failure(error2);
   let records;
   let source;
+  let notes = [];
   if (args.xml) {
     records = mapperStatementsToRecords(parseMapperText(args.xml, "inline-mapper.xml"));
     source = "inline-mapper.xml";
@@ -28355,11 +28389,13 @@ function analyzeMapperTool(args) {
     const loaded = loadInput(args.path, { kind: "mapper" });
     records = loaded.records;
     source = args.path;
+    notes = loaded.notes;
   }
   if (records.length === 0) return failure("\u6CA1\u6709\u89E3\u6790\u51FA\u4EFB\u4F55 mapper \u8BED\u53E5\u3002");
   const usable = analysableRecords(records);
   if (usable.length === 0) return failure(NOTHING_ANALYSABLE);
-  return toolResult(source, analyze(usable, { schema, ...ruleOptions(args) }), {
+  const result = { ...analyze(usable, { schema, ...ruleOptions(args) }), notes };
+  return toolResult(source, result, {
     emitSql: args.emitSql,
     top: args.top
   });
@@ -28678,6 +28714,7 @@ var LABELS = {
     ddl: "DDL",
     message: "\u8BF4\u660E",
     none: "\u2713 \u6CA1\u6709\u53D1\u73B0\u53EF\u62A5\u544A\u7684\u7D22\u5F15\u95EE\u9898",
+    noneQuiet: "\u6CA1\u6709\u5F97\u51FA\u53EF\u62A5\u544A\u7684\u7ED3\u8BBA\uFF0C\u539F\u56E0\u89C1\u4E0B\u65B9\u8BF4\u660E",
     advice: "\u5EFA\u8BAE",
     fingerprints: "\u4E2A\u67E5\u8BE2\u6307\u7EB9",
     skipped: "\u672A\u53C2\u4E0E\u5224\u5B9A",
@@ -28692,6 +28729,7 @@ var LABELS = {
     ddl: "DDL",
     message: "why",
     none: "\u2713 nothing to report",
+    noneQuiet: "nothing could be concluded, see the notes below",
     advice: "suggestions",
     fingerprints: "query fingerprints covered",
     skipped: "not evaluated:",
@@ -28707,7 +28745,7 @@ function renderTerminal(result, options = {}) {
   const lines = [];
   const counts = countBySeverity(result.findings);
   if (result.findings.length === 0) {
-    lines.push(import_picocolors.default.green(t.none));
+    lines.push(result.notes.length === 0 ? import_picocolors.default.green(t.none) : import_picocolors.default.yellow(`! ${t.noneQuiet}`));
   } else {
     lines.push(
       [
@@ -28791,6 +28829,9 @@ function wrap(text, indent, label) {
 function renderFooter(result, lang) {
   const t = LABELS[lang];
   const out = [];
+  for (const note of result.notes) {
+    out.push(`${import_picocolors.default.yellow("!")} ${lang === "en" ? note.noteEn : note.note}`);
+  }
   if (result.skipped.length > 0) {
     const groups = /* @__PURE__ */ new Map();
     for (const skipped of result.skipped) {
@@ -28822,7 +28863,7 @@ registerTitles(ruleCatalogue());
 async function runPipeline(source, options = {}) {
   const { llm, llmLimit, loadKind, loadInline, ...analyzeOptions } = options;
   const loaded = loadInput(source, { kind: loadKind, inline: loadInline });
-  const result = analyze(loaded.records, analyzeOptions);
+  const result = { ...analyze(loaded.records, analyzeOptions), notes: loaded.notes };
   if (!llm) return { loaded, result };
   const polished = await polish(result, llm, llmLimit ?? 10);
   return { loaded, result: { ...result, findings: polished.findings }, polished };
@@ -29047,7 +29088,7 @@ function printList(loaded, flags, label) {
   process.stdout.write(`
 ${import_picocolors2.default.bold(String(rows.length))} \u4E2A\u6307\u7EB9
 `);
-  for (const note of loaded.notes) process.stdout.write(`${import_picocolors2.default.yellow("!")} ${note}
+  for (const note of loaded.notes) process.stdout.write(`${import_picocolors2.default.yellow("!")} ${note.note}
 `);
 }
 program2.command("mcp").description("start the MCP server on stdio (for Claude / Qoder / Cursor)").action(async () => {

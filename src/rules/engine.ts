@@ -8,7 +8,7 @@
  *  2. Contain rule bugs. A throwing rule must not take down a CI gate.
  */
 
-import type { Finding, QueryRecord, Rule, RuleOptions, Schema } from "../core/types.js";
+import type { Finding, InputNote, QueryRecord, Rule, RuleOptions, Schema } from "../core/types.js";
 import { DEFAULT_RULE_OPTIONS, SEVERITY_ORDER } from "../core/types.js";
 import { ALL_RULES } from "./registry.js";
 
@@ -31,6 +31,13 @@ export interface AnalysisResult {
   analysed: number;
   skipped: SkippedRule[];
   errors: string[];
+  /**
+   * What the loader wants said about the input itself: a directory with no
+   * mappers, predicates built at runtime, events ignored while parsing. Set by
+   * the pipeline, not by `analyze`, and rendered everywhere a report goes: an
+   * empty result with a hidden note is how "nothing to report" becomes a lie.
+   */
+  notes: InputNote[];
   options: RuleOptions;
 }
 
@@ -76,6 +83,7 @@ export function analyze(records: QueryRecord[], options: AnalyzeOptions = {}): A
       .map(([id, v]) => ({ id, reason: v.reason, reasonEn: v.reasonEn, count: v.count }))
       .sort((a, b) => b.count - a.count),
     errors,
+    notes: [],
     options: opts,
   };
 }

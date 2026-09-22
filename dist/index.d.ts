@@ -142,6 +142,15 @@ interface Finding {
     /** Narrower suggestions on the same table that this wider index already serves. */
     coveredFingerprints?: string[];
 }
+/**
+ * A caveat about the input itself, carried in both languages: the report is
+ * bilingual and an English reader deserves the same warning, not a silent gap.
+ * Produced by the loader, rendered by every report format.
+ */
+interface InputNote {
+    note: string;
+    noteEn: string;
+}
 interface SchemaIndex {
     name: string;
     columns: string[];
@@ -302,10 +311,14 @@ declare function mapperStatementsToRecords(statements: MapperStatement[]): Query
 
 type InputKind = "slowlog" | "mapper" | "schema" | "sql";
 declare function detectInputKind(pathOrText: string): InputKind;
+/**
+ * `InputNote` is declared in core/types.ts so the rule engine and the reports can
+ * name it without importing the loader.
+ */
 interface LoadedInput {
     records: QueryRecord[];
     kind: InputKind;
-    notes: string[];
+    notes: InputNote[];
 }
 /** Read a file (or accept inline text) and produce query records. */
 declare function loadInput(source: string, options?: {
@@ -324,4 +337,4 @@ interface SchemaLoadResult {
 declare function validateSchema(input: unknown): SchemaLoadResult;
 declare function loadSchema(path: string): SchemaLoadResult;
 
-export { type ColumnRef, type ColumnRefScope, DEFAULT_RULE_OPTIONS, type Finding, type LimitClause, type MapperStatement, type MapperVariant, type ParsedQuery, type QueryMetrics, type QueryRecord, type ReportLang, type Rule, type RuleContext, type RuleOptions, SEVERITY_ORDER, type Schema, type SchemaColumn, type SchemaIndex, type SchemaTable, type Severity, type SlowLogResult, type SourceLocation, type StatementKind, type TableRef, buildRecordsFromSqlText, detectInputKind, discoverMapperFiles, evidence, fingerprint, loadInput, loadMapperFiles, loadSchema, mapperStatementsToRecords, maskLiterals, parseMapperText, parseSlowLog, parseSql, readMapperFile, readTextFile, resolveLang, resolveTable, stripComments, validateSchema };
+export { type ColumnRef, type ColumnRefScope, DEFAULT_RULE_OPTIONS, type Finding, type InputNote, type LimitClause, type MapperStatement, type MapperVariant, type ParsedQuery, type QueryMetrics, type QueryRecord, type ReportLang, type Rule, type RuleContext, type RuleOptions, SEVERITY_ORDER, type Schema, type SchemaColumn, type SchemaIndex, type SchemaTable, type Severity, type SlowLogResult, type SourceLocation, type StatementKind, type TableRef, buildRecordsFromSqlText, detectInputKind, discoverMapperFiles, evidence, fingerprint, loadInput, loadMapperFiles, loadSchema, mapperStatementsToRecords, maskLiterals, parseMapperText, parseSlowLog, parseSql, readMapperFile, readTextFile, resolveLang, resolveTable, stripComments, validateSchema };

@@ -241,7 +241,7 @@ function printList(
     for (const note of row.notes) process.stdout.write(`       ${pc.yellow("!")} ${note}\n`);
   }
   process.stdout.write(`\n${pc.bold(String(rows.length))} 个指纹\n`);
-  for (const note of loaded.notes) process.stdout.write(`${pc.yellow("!")} ${note}\n`);
+  for (const note of loaded.notes) process.stdout.write(`${pc.yellow("!")} ${note.note}\n`);
 }
 
 program

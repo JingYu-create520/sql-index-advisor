@@ -27,6 +27,7 @@ const LABELS = {
     ddl: "DDL",
     message: "说明",
     none: "✓ 没有发现可报告的索引问题",
+    noneQuiet: "没有得出可报告的结论，原因见下方说明",
     advice: "建议",
     fingerprints: "个查询指纹",
     skipped: "未参与判定",
@@ -41,6 +42,7 @@ const LABELS = {
     ddl: "DDL",
     message: "why",
     none: "✓ nothing to report",
+    noneQuiet: "nothing could be concluded, see the notes below",
     advice: "suggestions",
     fingerprints: "query fingerprints covered",
     skipped: "not evaluated:",
@@ -58,7 +60,10 @@ export function renderTerminal(result: AnalysisResult, options: TerminalOptions 
   const counts = countBySeverity(result.findings);
 
   if (result.findings.length === 0) {
-    lines.push(pc.green(t.none));
+    // A checkmark is a claim. If the loader had something to complain about (no
+    // mappers found, predicates that only exist at runtime), the run is not
+    // clean, it is uninformative, and the difference has to show.
+    lines.push(result.notes.length === 0 ? pc.green(t.none) : pc.yellow(`! ${t.noneQuiet}`));
   } else {
     lines.push(
       [
@@ -163,6 +168,9 @@ function wrap(text: string, indent: number, label?: string): string[] {
 function renderFooter(result: AnalysisResult, lang: "zh" | "en"): string[] {
   const t = LABELS[lang];
   const out: string[] = [];
+  for (const note of result.notes) {
+    out.push(`${pc.yellow("!")} ${lang === "en" ? note.noteEn : note.note}`);
+  }
   if (result.skipped.length > 0) {
     const groups = new Map<string, string[]>();
     for (const skipped of result.skipped) {

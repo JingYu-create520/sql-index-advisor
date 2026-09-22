@@ -6,7 +6,9 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
 
-import type { QueryRecord } from "./types.js";
+import type { InputNote, QueryRecord } from "./types.js";
+
+export type { InputNote };
 import { parseSql, splitStatements } from "../parsers/sql.js";
 import { parseSlowLog } from "../parsers/slowlog.js";
 import { discoverMapperFiles, loadMapperFiles, mapperStatementsToRecords } from "../parsers/mapper.js";
@@ -31,18 +33,28 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/**
+ * `InputNote` is declared in core/types.ts so the rule engine and the reports can
+ * name it without importing the loader.
+ */
 export interface LoadedInput {
   records: QueryRecord[];
   kind: InputKind;
-  notes: string[];
+  notes: InputNote[];
 }
+
+/** Wrap a parser-produced note, which exists only as one line of text. */
+const parseNote = (text: string): InputNote => ({
+  note: text,
+  noteEn: text.replace("无法识别的谓词已跳过", "unrecognised predicate skipped").replace("已跳过", "skipped"),
+});
 
 /** Read a file (or accept inline text) and produce query records. */
 export function loadInput(
   source: string,
   options: { inline?: boolean; kind?: InputKind } = {},
 ): LoadedInput {
-  const notes: string[] = [];
+  const notes: InputNote[] = [];
   const kind = options.kind ?? detectInputKind(source);
 
   if (options.inline || (!options.kind && !existsSync(source))) {
@@ -50,7 +62,7 @@ export function loadInput(
     // multi-statement call must not be analysed as a single query.
     const records: QueryRecord[] = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes);
+      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql" as const, occurrences: 1 };
     });
     return { kind: "sql", notes, records };
@@ -58,13 +70,41 @@ export function loadInput(
 
   if (kind === "mapper") {
     const files = discoverMapperFiles(source);
-    if (files.length === 0) notes.push(`在 ${source} 下没有找到 <mapper> XML 文件`);
+    if (files.length === 0) {
+      notes.push({
+        note: `在 ${source} 下没有找到 <mapper> XML 文件，这次没有分析任何语句。`,
+        noteEn: `No <mapper> XML files under ${source}; nothing was analysed.`,
+      });
+    }
     const statements = loadMapperFiles(files);
-    return { kind, notes, records: mapperStatementsToRecords(statements) };
+    const records = mapperStatementsToRecords(statements);
+    // A MyBatis `${...}` is a text substitution, so the predicate is not in the
+    // file at all: `${criterion.condition}` reaches the parser as `where ?` and
+    // every rule correctly finds nothing to say. Without this line the run prints
+    // "nothing to report" over a project whose filters were never visible, which
+    // is exactly the silence-means-passed failure. Seen on a real project where all
+    // 205 statements were generated from Example criteria.
+    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
+    if (unjudged > 0) {
+      notes.push({
+        note: `${unjudged}/${records.length} 条语句的条件无法静态识别（多为 \${} 文本替换，例如 where \${criterion.condition}），这些语句没有参与判定，这不等于通过。`,
+        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`,
+      });
+    }
+    return { kind, notes, records };
   }
 
   if (kind === "schema") {
-    return { kind, records: [], notes: [`${source} 是 schema 文件，请用 --schema 传入`] };
+    return {
+      kind,
+      records: [],
+      notes: [
+        {
+          note: `${source} 是 schema 文件，请用 --schema 传入，而不是当成查询来分析。`,
+          noteEn: `${source} is a schema file: pass it with --schema instead of analysing it as queries.`,
+        },
+      ],
+    };
   }
 
   const text = readFileSync(source, "utf8");
@@ -76,11 +116,14 @@ export function loadInput(
       })();
 
   if (kind === "slowlog" && result.ignoredEvents > 0) {
-    notes.push(`忽略了 ${result.ignoredEvents} 个无法识别的事件块`);
+    notes.push({
+      note: `忽略了 ${result.ignoredEvents} 个无法识别的事件块`,
+      noteEn: `${result.ignoredEvents} event block(s) were ignored as unrecognised`,
+    });
   }
   // A record the parser refused is not a clean record: surface why, or the run
   // ends with "nothing to report" over input that was never looked at.
-  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(reason);
+  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(parseNote(reason));
   return { kind: kind === "sql" ? "sql" : "slowlog", records: result.records, notes };
 }
 

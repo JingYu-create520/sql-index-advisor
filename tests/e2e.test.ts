@@ -1,6 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { loadInput } from "../src/core/input.js";
+import { runPipeline } from "../src/core/pipeline.js";
+import { renderTerminal } from "../src/report/terminal.js";
+import { buildJsonReport, renderJson } from "../src/report/json.js";
 import { parseSlowLog } from "../src/parsers/slowlog.js";
 import { discoverMapperFiles, loadMapperFiles, mapperStatementsToRecords } from "../src/parsers/mapper.js";
 
@@ -72,5 +78,54 @@ SELECT id FROM t WHERE a = 2;
         parsed: { tables: [{ name: "t" }], kind: "select" },
       },
     ]);
+  });
+});
+
+/**
+ * The promise the whole tool is built on: silence is only ever produced by
+ * something, and the report has to name that something. Two real cases, both
+ * from running this over other people's projects.
+ */
+describe("an empty report still says why", () => {
+  it("a directory with no mappers is not reported as a pass", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sia-empty-"));
+    try {
+      const { loaded, result } = await runPipeline(dir, { loadKind: "mapper" });
+      expect(result.findings).toEqual([]);
+      expect(loaded.notes).toHaveLength(1);
+      expect(loaded.notes[0]?.note).toContain("没有找到");
+      const report = renderTerminal(result, { lang: "zh" });
+      expect(report).toContain("!");
+      // The green check is a claim of cleanliness; this run has none.
+      expect(report).not.toContain("✓");
+      const json = JSON.parse(renderJson(buildJsonReport(result, dir)));
+      expect(json.notes[0].noteEn).toContain("No <mapper> XML files");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("predicates that only exist at runtime are counted, not passed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sia-dyn-"));
+    try {
+      writeFileSync(
+        join(dir, "Item.xml"),
+        [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          "<!DOCTYPE mapper PUBLIC \"-//mybatis.org//DTD Mapper 3.0//EN\" \"http://mybatis.org/dtd/mybatis-3-mapper.dtd\">",
+          '<mapper namespace="x.Item">',
+          '  <select id="list" resultType="map">select id, name from tb_item where ${criterion.condition}</select>',
+          '  <select id="byShop" resultType="map">select id from tb_item where shop_id = #{shopId}</select>',
+          "</mapper>",
+        ].join("\n"),
+      );
+      const loaded = loadInput(dir, { kind: "mapper" });
+      expect(loaded.notes.map((n) => n.note).join(" ")).toContain("1/2 条语句");
+      expect(loaded.notes.map((n) => n.noteEn).join(" ")).toContain("cannot be resolved statically");
+      // and the analysable statement is still analysed
+      expect(loaded.records).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

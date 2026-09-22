@@ -1435,25 +1435,51 @@ function isDirectory(path) {
     return false;
   }
 }
+var parseNote = (text) => ({
+  note: text,
+  noteEn: text.replace("\u65E0\u6CD5\u8BC6\u522B\u7684\u8C13\u8BCD\u5DF2\u8DF3\u8FC7", "unrecognised predicate skipped").replace("\u5DF2\u8DF3\u8FC7", "skipped")
+});
 function loadInput(source, options = {}) {
   const notes = [];
   const kind = options.kind ?? detectInputKind(source);
   if (options.inline || !options.kind && !existsSync(source)) {
     const records = splitStatements(source).map((sql) => {
       const parsed = parseSql(sql);
-      if (parsed.notes.length > 0) notes.push(...parsed.notes);
+      if (parsed.notes.length > 0) notes.push(...parsed.notes.map(parseNote));
       return { fingerprint: parsed.fingerprint, sql, parsed, input: "sql", occurrences: 1 };
     });
     return { kind: "sql", notes, records };
   }
   if (kind === "mapper") {
     const files = discoverMapperFiles(source);
-    if (files.length === 0) notes.push(`\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6`);
+    if (files.length === 0) {
+      notes.push({
+        note: `\u5728 ${source} \u4E0B\u6CA1\u6709\u627E\u5230 <mapper> XML \u6587\u4EF6\uFF0C\u8FD9\u6B21\u6CA1\u6709\u5206\u6790\u4EFB\u4F55\u8BED\u53E5\u3002`,
+        noteEn: `No <mapper> XML files under ${source}; nothing was analysed.`
+      });
+    }
     const statements = loadMapperFiles(files);
-    return { kind, notes, records: mapperStatementsToRecords(statements) };
+    const records = mapperStatementsToRecords(statements);
+    const unjudged = records.filter((r) => r.parsed.notes.length > 0).length;
+    if (unjudged > 0) {
+      notes.push({
+        note: `${unjudged}/${records.length} \u6761\u8BED\u53E5\u7684\u6761\u4EF6\u65E0\u6CD5\u9759\u6001\u8BC6\u522B\uFF08\u591A\u4E3A \${} \u6587\u672C\u66FF\u6362\uFF0C\u4F8B\u5982 where \${criterion.condition}\uFF09\uFF0C\u8FD9\u4E9B\u8BED\u53E5\u6CA1\u6709\u53C2\u4E0E\u5224\u5B9A\uFF0C\u8FD9\u4E0D\u7B49\u4E8E\u901A\u8FC7\u3002`,
+        noteEn: `${unjudged}/${records.length} statement(s) had predicates that cannot be resolved statically (usually a \${} text substitution such as where \${criterion.condition}); they took part in no rule, which is not a pass.`
+      });
+    }
+    return { kind, notes, records };
   }
   if (kind === "schema") {
-    return { kind, records: [], notes: [`${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165`] };
+    return {
+      kind,
+      records: [],
+      notes: [
+        {
+          note: `${source} \u662F schema \u6587\u4EF6\uFF0C\u8BF7\u7528 --schema \u4F20\u5165\uFF0C\u800C\u4E0D\u662F\u5F53\u6210\u67E5\u8BE2\u6765\u5206\u6790\u3002`,
+          noteEn: `${source} is a schema file: pass it with --schema instead of analysing it as queries.`
+        }
+      ]
+    };
   }
   const text = readFileSync2(source, "utf8");
   const result = kind === "sql" && !isDirectory(source) && source.toLowerCase().endsWith(".sql") ? { records: buildRecordsFromSqlText(text, source), ignoredEvents: 0, totalEvents: 0 } : (() => {
@@ -1461,9 +1487,12 @@ function loadInput(source, options = {}) {
     return { records: slow.records, ignoredEvents: slow.ignoredEvents, totalEvents: slow.totalEvents };
   })();
   if (kind === "slowlog" && result.ignoredEvents > 0) {
-    notes.push(`\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`);
+    notes.push({
+      note: `\u5FFD\u7565\u4E86 ${result.ignoredEvents} \u4E2A\u65E0\u6CD5\u8BC6\u522B\u7684\u4E8B\u4EF6\u5757`,
+      noteEn: `${result.ignoredEvents} event block(s) were ignored as unrecognised`
+    });
   }
-  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(reason);
+  for (const reason of new Set(result.records.flatMap((r) => r.parsed.notes))) notes.push(parseNote(reason));
   return { kind: kind === "sql" ? "sql" : "slowlog", records: result.records, notes };
 }
 function buildRecordsFromSqlText(text, file) {

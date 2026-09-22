@@ -36,7 +36,10 @@ export async function runPipeline(
 ): Promise<PipelineOutput> {
   const { llm, llmLimit, loadKind, loadInline, ...analyzeOptions } = options;
   const loaded = loadInput(source, { kind: loadKind, inline: loadInline });
-  const result = analyze(loaded.records, analyzeOptions);
+  // The loader's caveats belong to the result, not to a side channel: every
+  // renderer (terminal, JSON, MCP) has to carry them, or an empty report with a
+  // hidden note is how "nothing to report" turns into a false pass.
+  const result = { ...analyze(loaded.records, analyzeOptions), notes: loaded.notes };
 
   if (!llm) return { loaded, result };
   const polished = await polish(result, llm, llmLimit ?? 10);

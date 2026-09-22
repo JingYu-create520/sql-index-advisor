@@ -88,7 +88,9 @@ describe("validateSchema", () => {
   it("accepts the shipped example", () => {
     const example = loadInput("examples/schema.json");
     expect(example.records).toEqual([]);
-    expect(example.notes.join(" ")).toContain("--schema");
+    expect(example.notes.map((n) => n.note).join(" ")).toContain("--schema");
+    // Both languages, or an English reader loses the only warning in the run.
+    expect(example.notes.map((n) => n.noteEn).join(" ")).toContain("--schema");
   });
 });
 

@@ -169,6 +169,16 @@ export interface Finding {
   coveredFingerprints?: string[];
 }
 
+/**
+ * A caveat about the input itself, carried in both languages: the report is
+ * bilingual and an English reader deserves the same warning, not a silent gap.
+ * Produced by the loader, rendered by every report format.
+ */
+export interface InputNote {
+  note: string;
+  noteEn: string;
+}
+
 export interface SchemaIndex {
   name: string;
   columns: string[];
