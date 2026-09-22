@@ -1,6 +1,6 @@
 {
   "name": "sql-index-advisor",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Offline index advisor for MySQL / MyBatis: slow query log in, index recommendations + migration SQL out.",
   "keywords": [
     "mysql",
@@ -48,7 +48,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
-    "prepare": "npm run build"
+    "prepare": "node scripts/prepare.mjs",
+    "check:bundle": "npm run build && git diff --exit-code dist"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

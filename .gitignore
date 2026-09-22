@@ -1,5 +1,6 @@
 node_modules/
-dist/
+# dist/ is committed on purpose: installing straight from GitHub must not need a build.
+# ci.yml rebuilds and fails if the committed bundle drifts from src/.
 coverage/
 *.tsbuildinfo
 .DS_Store

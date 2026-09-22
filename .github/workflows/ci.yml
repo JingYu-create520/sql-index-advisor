@@ -32,6 +32,32 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Installing straight from GitHub has to work without a build step, so the
+      # bundle is committed. That only holds if nobody lets it drift from src/,
+      # which is what this fails on.
+      - name: Committed bundle matches source
+        run: |
+          npm run build
+          if ! git diff --exit-code dist; then
+            echo "dist/ is stale: run npm run build and commit the output" >&2
+            exit 1
+          fi
+
+      # The documented install path, exercised the way a stranger uses it: into an
+      # empty project, from the package as it would be fetched, and the resulting
+      # binary has to actually run. This is the step that would have caught the
+      # `prepare` hook failing with `tsup: not found` on a git install.
+      - name: Install from a clean project and run
+        run: |
+          set -e
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          npm init -y > /dev/null
+          npm i --no-audit --no-fund "$GITHUB_WORKSPACE" > /dev/null
+          ./node_modules/.bin/sia --version
+          ./node_modules/.bin/sia query "SELECT id FROM orders WHERE user_id = 1" > /dev/null || true
+          ./node_modules/.bin/sia query "SELECT id FROM orders WHERE shop_id = 1 ORDER BY create_time" --format json | grep -q '"rule": "SIA001"'
+
       # Build before test: the MCP suite spawns the real dist/mcp.js bundle for a
       # stdio JSON-RPC handshake, and skips itself if the bundle is absent.
       - name: Test
