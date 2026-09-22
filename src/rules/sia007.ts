@@ -10,7 +10,7 @@
 
 import type { Finding, Rule, RuleContext } from "../core/types.js";
 import { addIndexDdl, bucketByTable, dedupeColumns, truncateSql } from "./helpers.js";
-import { columnKeyBytes, findColumn, findTable } from "../schema/loader.js";
+import { columnKeyBytes, findColumn, findTable, onlyPlainParts } from "../schema/loader.js";
 
 const RULE_ID = "SIA007";
 const ROW_PRESSURE = 10_000;
@@ -37,11 +37,14 @@ export const sia007: Rule = {
     const predicate = dedupeColumns([...bucket.equality, ...bucket.inList, ...bucket.range]);
     if (predicate.length === 0) return [];
 
-    // Ownership: no usable predicate index yet is SIA001's job.
+    // Ownership: no usable predicate index yet is SIA001's job. An index whose
+    // key parts include an expression is not a candidate either: the extension
+    // this rule proposes is written out column by column, and there is no column
+    // name to write for a functional or multi-valued part.
     const predicateName = predicate.map((c) => c.column);
-    const covering = table.indexes.find((index) =>
-      predicateName.every((column, position) => index.columns[position] === column),
-    );
+    const covering = table.indexes
+      .filter(onlyPlainParts)
+      .find((index) => predicateName.every((column, position) => index.columns[position] === column));
     if (!covering) return [];
 
     const missing = record.parsed.selectColumns.filter((c) => !covering.columns.includes(c));

@@ -1719,7 +1719,11 @@ var columnSchema = z.object({
 });
 var indexSchema = z.object({
   name: z.string().min(1),
-  columns: z.array(z.string()).min(1),
+  // `nullable()` because that is what MySQL 8.0 reports for a functional index
+  // key part. Rejecting it used to fail the *whole* file, so one
+  // `CREATE INDEX … ((DATE(create_time)))` anywhere in the database cost the user
+  // every schema-gated rule — and SIA004 is the rule that tells them to write one.
+  columns: z.array(z.string().nullable()).min(1),
   unique: z.boolean().optional(),
   primary: z.boolean().optional(),
   subParts: z.array(z.number().nullable()).optional()
@@ -1759,7 +1763,11 @@ function validateSchema(input) {
     })),
     indexes: t.indexes.map((i) => ({
       name: i.name,
-      columns: i.columns.map((c) => c.toLowerCase()),
+      // A functional or multi-valued index key part has no column name at all
+      // (`COLUMN_NAME` is NULL in information_schema), so `null` is kept rather
+      // than dropped: dropping it would silently shorten the index and let a rule
+      // read `(user_id)` out of `(cast(x as date), user_id)`.
+      columns: i.columns.map((c) => c?.toLowerCase() ?? null),
       unique: i.unique,
       primary: i.primary,
       subParts: i.subParts

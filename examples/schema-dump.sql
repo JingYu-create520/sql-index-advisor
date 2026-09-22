@@ -16,6 +16,13 @@
 --
 -- GROUP_CONCAT rather than JSON_ARRAYAGG: JSON_ARRAYAGG takes no ORDER BY, and
 -- index column order is the whole point of the file.
+--
+-- An index key part that is an expression comes back as `columns: [null]`, because
+-- MySQL stores functional and multi-valued parts with COLUMN_NAME = NULL. That is
+-- the truth, and the loader accepts it. The expression text itself is deliberately
+-- not dumped: it lives in STATISTICS.EXPRESSION, which does not exist on 5.7, and
+-- this file has to run on both. SIA004 therefore recognises an already-created
+-- functional index by its name, and its message says that match is by name.
 
 SET SESSION group_concat_max_len = 67108864;
 

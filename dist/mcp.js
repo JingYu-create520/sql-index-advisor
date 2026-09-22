@@ -22515,7 +22515,11 @@ var columnSchema = external_exports.object({
 });
 var indexSchema = external_exports.object({
   name: external_exports.string().min(1),
-  columns: external_exports.array(external_exports.string()).min(1),
+  // `nullable()` because that is what MySQL 8.0 reports for a functional index
+  // key part. Rejecting it used to fail the *whole* file, so one
+  // `CREATE INDEX … ((DATE(create_time)))` anywhere in the database cost the user
+  // every schema-gated rule — and SIA004 is the rule that tells them to write one.
+  columns: external_exports.array(external_exports.string().nullable()).min(1),
   unique: external_exports.boolean().optional(),
   primary: external_exports.boolean().optional(),
   subParts: external_exports.array(external_exports.number().nullable()).optional()
@@ -22555,7 +22559,11 @@ function validateSchema(input) {
     })),
     indexes: t.indexes.map((i) => ({
       name: i.name,
-      columns: i.columns.map((c) => c.toLowerCase()),
+      // A functional or multi-valued index key part has no column name at all
+      // (`COLUMN_NAME` is NULL in information_schema), so `null` is kept rather
+      // than dropped: dropping it would silently shorten the index and let a rule
+      // read `(user_id)` out of `(cast(x as date), user_id)`.
+      columns: i.columns.map((c) => c?.toLowerCase() ?? null),
       unique: i.unique,
       primary: i.primary,
       subParts: i.subParts
@@ -22616,6 +22624,12 @@ function charsetBytes(charset) {
   if (charset.startsWith("utf8")) return 3;
   if (charset.startsWith("latin1") || charset.startsWith("ascii")) return 1;
   return 4;
+}
+function onlyPlainParts(index) {
+  return index.columns.every((part) => part !== null);
+}
+function describeIndexParts(index, lang = "zh") {
+  return index.columns.map((part) => part ?? (lang === "zh" ? "\u3008\u8868\u8FBE\u5F0F\u3009" : "(expression)")).join(", ");
 }
 
 // src/rules/helpers.ts
@@ -22883,7 +22897,7 @@ function candidateColumns(bucket, table) {
 }
 function singlePrimaryKey(table) {
   const pk = table?.indexes.find((i) => i.primary);
-  return pk && pk.columns.length === 1 ? pk.columns[0] : void 0;
+  return pk && pk.columns.length === 1 ? pk.columns[0] ?? void 0 : void 0;
 }
 function isJoinOutputKey(ref, table) {
   if (ref.scope !== "join-on") return false;
@@ -22968,7 +22982,7 @@ function buildMessage(bucket, usable, dropped, prefixHit, hasTable, schemaSuppli
   ];
   if (prefixHit) {
     parts.push(
-      `\u5DF2\u6709\u7D22\u5F15 ${prefixHit.name}(${prefixHit.columns.join(", ")}) \u53EA\u8986\u76D6\u524D\u7F00\uFF0C\u65B0\u7D22\u5F15\u53EF\u7528\u540E\u53EF\u8BC4\u4F30\u662F\u5426\u4E0B\u7EBF\u65E7\u7D22\u5F15\u4EE5\u51CF\u5C11\u5199\u653E\u5927\u3002`
+      `\u5DF2\u6709\u7D22\u5F15 ${prefixHit.name}(${describeIndexParts(prefixHit, "zh")}) \u53EA\u8986\u76D6\u524D\u7F00\uFF0C\u65B0\u7D22\u5F15\u53EF\u7528\u540E\u53EF\u8BC4\u4F30\u662F\u5426\u4E0B\u7EBF\u65E7\u7D22\u5F15\u4EE5\u51CF\u5C11\u5199\u653E\u5927\u3002`
     );
   }
   if (dropped.length > 0) {
@@ -22991,7 +23005,7 @@ function buildMessageEn(bucket, usable, dropped, prefixHit, hasSchema, schemaSup
     );
   } else if (prefixHit) {
     parts.push(
-      `Existing index ${prefixHit.name}(${prefixHit.columns.join(", ")}) covers only a left prefix of the proposed one; evaluate dropping it once the new index is live, since keeping both doubles the write cost.`
+      `Existing index ${prefixHit.name}(${describeIndexParts(prefixHit, "en")}) covers only a left prefix of the proposed one; evaluate dropping it once the new index is live, since keeping both doubles the write cost.`
     );
   } else {
     parts.push("No existing index serves this access path.");
@@ -23080,7 +23094,7 @@ var sia003 = {
         [...bucket.equality, ...bucket.inList, ...bucket.range, ...bucket.ordering].map((c) => c.column)
       );
       if (used.size === 0) continue;
-      for (const index of table.indexes) {
+      for (const index of table.indexes.filter(onlyPlainParts)) {
         if (index.columns.length < 2) continue;
         let run = 0;
         while (run < index.columns.length && used.has(index.columns[run])) run += 1;
@@ -23135,14 +23149,16 @@ var sia004 = {
       const table = findTable(schema, bucket.table);
       for (const ref of dedupe(bucket.wrapped)) {
         const rewrite = buildRewrite(ref);
-        const functionalDdl = options.mysqlVersion >= 8 && table ? [
+        const wantedName = table ? indexName(table.name, [ref.column]) : "";
+        const alreadyNamed = wantedName !== "" && table.indexes.some((i) => i.name.toLowerCase() === wantedName.toLowerCase());
+        const functionalDdl = options.mysqlVersion >= 8 && table && !alreadyNamed ? [
           `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(
             indexName(table.name, [ref.column])
           )} ((${ref.raw}));`
         ] : [];
         findings.push({
           rule: RULE_ID4,
-          severity: rewrite ? "error" : "warn",
+          severity: alreadyNamed ? "warn" : rewrite ? "error" : "warn",
           sql: truncateSql(record2.parsed.sql),
           fingerprint: record2.fingerprint,
           source: record2.source,
@@ -23155,16 +23171,18 @@ var sia004 = {
           suggestedDDL: functionalDdl,
           rewrite: rewrite?.predicate,
           message: [
-            `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u7D22\u5F15\u91CC\u5B58\u7684\u662F\u539F\u503C\uFF0C\u56E0\u6B64\u8BE5\u5217\u4E0A\u7684\u7D22\u5F15\u5B8C\u5168\u7528\u4E0D\u4E0A\u3002`,
+            alreadyNamed ? `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u6309\u539F\u503C\u5EFA\u7684\u7D22\u5F15\u5BF9\u5B83\u65E0\u6548\uFF1B\u4E0D\u8FC7\u8FD9\u5F20\u8868\u4E0A\u5DF2\u6709\u4E00\u4E2A\u53EB ${wantedName} \u7684\u7D22\u5F15\uFF0C\u800C\u5B83\u6B63\u662F\u672C\u6761\u5EFA\u8BAE\u4F1A\u53D6\u7684\u540D\u5B57\uFF0C\u82E5\u5B83\u7D22\u5F15\u7684\u6B63\u662F ${ref.raw}\uFF0C\u8FD9\u4E2A\u6761\u4EF6\u5DF2\u7ECF\u80FD\u8D70\u7D22\u5F15\u3002` : `\u6761\u4EF6 ${ref.predicateText ?? ref.raw} \u5728\u5217 ${ref.column} \u4E0A\u5957\u4E86\u51FD\u6570\u6216\u8FD0\u7B97\uFF0C\u7D22\u5F15\u91CC\u5B58\u7684\u662F\u539F\u503C\uFF0C\u56E0\u6B64\u8BE5\u5217\u4E0A\u7684\u7D22\u5F15\u5B8C\u5168\u7528\u4E0D\u4E0A\u3002`,
             rewrite ? `\u6539\u5199\u65B9\u6848\uFF1A${rewrite.predicate}\uFF08${rewrite.why}\uFF09` : "\u8BE5\u8868\u8FBE\u5F0F\u6CA1\u6709\u7B49\u4EF7\u6539\u5199\u5F62\u5F0F\uFF0C\u53EF\u8003\u8651\u51FD\u6570\u7D22\u5F15\u3002",
             ...options.mysqlVersion >= 8 ? [`MySQL 8.0 \u53EF\u7528\u51FD\u6570\u7D22\u5F15 ((${ref.raw})) \u76F4\u63A5\u7D22\u5F15\u8868\u8FBE\u5F0F\u7ED3\u679C\uFF0C\u4F46\u67E5\u8BE2\u5FC5\u987B\u5199\u6210\u5B8C\u5168\u76F8\u540C\u7684\u8868\u8FBE\u5F0F\u624D\u80FD\u547D\u4E2D\uFF1B5.7 \u4E0D\u652F\u6301\u3002`] : [`MySQL 5.7 \u4E0D\u652F\u6301\u51FD\u6570\u7D22\u5F15\uFF0C\u53EA\u80FD\u6539\u5199\u67E5\u8BE2\u3002`],
-            functionalDdl.length === 0 && !rewrite ? "\u5F53\u524D\u8F93\u5165\u672A\u63D0\u4F9B --schema \u6216\u7248\u672C\u4F4E\u4E8E 8.0\uFF0C\u672A\u751F\u6210 DDL\u3002" : ""
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed ? "\u5F53\u524D\u8F93\u5165\u672A\u63D0\u4F9B --schema \u6216\u7248\u672C\u4F4E\u4E8E 8.0\uFF0C\u672A\u751F\u6210 DDL\u3002" : "",
+            alreadyNamed ? `\u6309\u540D\u5B57\u5BF9\u9F50\u53EA\u662F\u63D0\u793A\u800C\u4E0D\u662F\u8BC1\u660E\uFF1A\u51FD\u6570\u7D22\u5F15\u7D22\u5F15\u7684\u8868\u8FBE\u5F0F\u5728 information_schema \u91CC\u6CA1\u6709\u53EF\u8BFB\u7684\u5217\u540D\uFF08EXPRESSION \u8FD9\u4E00\u5217 5.7 \u4E5F\u4E0D\u5B58\u5728\uFF09\uFF0C\u6240\u4EE5\u8BF7\u7528 SHOW INDEX \u81EA\u5DF1\u786E\u8BA4\u4E00\u6B21\u3002` : ""
           ].filter(Boolean).join(" "),
           messageEn: [
-            `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
+            alreadyNamed ? `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} is not served by an index on the raw column value; this table already carries an index named ${wantedName}, which is the name this advice would use, so if that one indexes ${ref.raw} the predicate is served today.` : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
             rewrite ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).` : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
             options.mysqlVersion >= 8 ? `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.` : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
-            functionalDdl.length === 0 && !rewrite ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.` : ""
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.` : "",
+            alreadyNamed ? `That match is by name, not proof: an expression key part carries no readable column name in information_schema (the EXPRESSION column is absent on 5.7 too), so confirm with SHOW INDEX.` : ""
           ].filter(Boolean).join(" ")
         });
       }
@@ -23433,9 +23451,7 @@ var sia007 = {
     const predicate = dedupeColumns([...bucket.equality, ...bucket.inList, ...bucket.range]);
     if (predicate.length === 0) return [];
     const predicateName = predicate.map((c) => c.column);
-    const covering = table.indexes.find(
-      (index) => predicateName.every((column, position) => index.columns[position] === column)
-    );
+    const covering = table.indexes.filter(onlyPlainParts).find((index) => predicateName.every((column, position) => index.columns[position] === column));
     if (!covering) return [];
     const missing = record2.parsed.selectColumns.filter((c) => !covering.columns.includes(c));
     const ordering = dedupeColumns(bucket.ordering).map((c) => c.column);

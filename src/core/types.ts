@@ -190,11 +190,28 @@ export interface InputNote {
 
 export interface SchemaIndex {
   name: string;
-  columns: string[];
+  /**
+   * Key parts in order. `null` is a real possibility and not a missing value: on
+   * MySQL 8.0 a functional index (`CREATE INDEX … ((DATE(create_time)))`) and a
+   * multi-valued JSON index report `COLUMN_NAME = NULL` in
+   * `information_schema.STATISTICS`, with the expression kept in a separate
+   * `EXPRESSION` column that a 5.7 server does not have. Such a part matches no
+   * column name, which is exactly how the rules must treat it — see
+   * `onlyPlainParts` in `schema/loader.ts`.
+   */
+  columns: (string | null)[];
   unique?: boolean;
   primary?: boolean;
   /** Prefix lengths in characters; null for full-length parts of the index. */
   subParts?: (number | null)[];
+}
+
+/**
+ * An index every one of whose key parts is a named column — the shape a rule can
+ * compare against a query. `onlyPlainParts` in `schema/loader.ts` narrows to this.
+ */
+export interface PlainSchemaIndex extends Omit<SchemaIndex, "columns"> {
+  columns: string[];
 }
 
 export interface SchemaColumn {

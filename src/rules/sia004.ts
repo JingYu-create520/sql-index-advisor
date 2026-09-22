@@ -40,8 +40,24 @@ export const sia004: Rule = {
       const table = findTable(schema, bucket.table);
       for (const ref of dedupe(bucket.wrapped)) {
         const rewrite = buildRewrite(ref);
+        const wantedName = table ? indexName(table.name, [ref.column]) : "";
+        /**
+         * Has this advice already been followed? A functional index reports no
+         * column name in `information_schema` (its expression lives in a column a
+         * 5.7 server does not have, so the shared dump cannot carry it), which
+         * leaves the name we would have used as the only handle: create the index
+         * this tool suggests, re-export the schema, and without this check the same
+         * `ADD INDEX` comes back — into a migration file that then fails on
+         * duplicate key name.
+         *
+         * A name match is not proof the indexed expression is the same one, so the
+         * finding stays and only the DDL goes, with the verification step named.
+         */
+        const alreadyNamed =
+          wantedName !== "" &&
+          table!.indexes.some((i) => i.name.toLowerCase() === wantedName.toLowerCase());
         const functionalDdl =
-          options.mysqlVersion >= 8 && table
+          options.mysqlVersion >= 8 && table && !alreadyNamed
             ? [
                 `ALTER TABLE ${quoteIdent(table.name)} ADD INDEX ${quoteIdent(
                   indexName(table.name, [ref.column]),
@@ -51,7 +67,7 @@ export const sia004: Rule = {
 
         findings.push({
           rule: RULE_ID,
-          severity: rewrite ? "error" : "warn",
+          severity: alreadyNamed ? "warn" : rewrite ? "error" : "warn",
           sql: truncateSql(record.parsed.sql),
           fingerprint: record.fingerprint,
           source: record.source,
@@ -64,25 +80,40 @@ export const sia004: Rule = {
           suggestedDDL: functionalDdl,
           rewrite: rewrite?.predicate,
           message: [
-            `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
+            alreadyNamed
+              ? `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，按原值建的索引对它无效；不过这张表上已有一个叫 ${wantedName} 的索引，而它正是本条建议会取的名字，若它索引的正是 ${ref.raw}，这个条件已经能走索引。`
+              : `条件 ${ref.predicateText ?? ref.raw} 在列 ${ref.column} 上套了函数或运算，索引里存的是原值，因此该列上的索引完全用不上。`,
             rewrite ? `改写方案：${rewrite.predicate}（${rewrite.why}）` : "该表达式没有等价改写形式，可考虑函数索引。",
             ...(options.mysqlVersion >= 8
               ? [`MySQL 8.0 可用函数索引 ((${ref.raw})) 直接索引表达式结果，但查询必须写成完全相同的表达式才能命中；5.7 不支持。`]
               : [`MySQL 5.7 不支持函数索引，只能改写查询。`]),
-            functionalDdl.length === 0 && !rewrite ? "当前输入未提供 --schema 或版本低于 8.0，未生成 DDL。" : "",
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed
+              ? "当前输入未提供 --schema 或版本低于 8.0，未生成 DDL。"
+              : "",
+            alreadyNamed
+              ? `按名字对齐只是提示而不是证明：函数索引索引的表达式在 information_schema 里没有可读的列名（EXPRESSION 这一列 5.7 也不存在），所以请用 SHOW INDEX 自己确认一次。`
+              : "",
           ]
             .filter(Boolean)
             .join(" "),
           messageEn: [
-            `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
+            alreadyNamed
+              ? `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} is not served by an index on the raw column` +
+                ` value; this table already carries an index named ${wantedName}, which is the name this advice` +
+                ` would use, so if that one indexes ${ref.raw} the predicate is served today.`
+              : `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
             rewrite
               ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).`
               : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
             options.mysqlVersion >= 8
               ? `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.`
               : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
-            functionalDdl.length === 0 && !rewrite
+            functionalDdl.length === 0 && !rewrite && !alreadyNamed
               ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.`
+              : "",
+            alreadyNamed
+              ? `That match is by name, not proof: an expression key part carries no readable column name in` +
+                ` information_schema (the EXPRESSION column is absent on 5.7 too), so confirm with SHOW INDEX.`
               : "",
           ]
             .filter(Boolean)

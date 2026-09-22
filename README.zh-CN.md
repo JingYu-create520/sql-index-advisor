@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.13](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.13) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.14](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.14) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -246,6 +246,10 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 **子查询里的那张表从来没被看过。** `WHERE permission_id IN (SELECT role_id FROM upms_user_role WHERE user_id = ?)` 是两条语句、两张表都要索引，而工具只解析了外层：内层表不给建议，只写一条"这里没分析"的说明。`FROM (SELECT ...) d` 同理。四个被审计的开源 MyBatis 项目——378 个 mapper XML、1666 条语句记录——一共藏着 17 条这种内层查询。不常见，但每一条都是权限查询或报表分页，缺的那条索引是实打实的。这次审计里冒出来的两条：`paicoding` 的 `EXISTS (SELECT 1 FROM column_article ca WHERE ca.article_id = a.id AND ca.column_id = ?)` 现在拿到 `(article_id, column_id)`；`zheng` 的 `upms_user_role`，建表语句里除了主键什么都没有，现在会为内层那次扫描拿到 `ADD INDEX (user_id)`。做法是把任意深度的括号内 `SELECT` 提成独立语句再分析。为了敢这么做，有一处是刻意放弃的：子查询里 `=` 右边那个不带表名限定的列不再当作候选，因为 MySQL 是由内向外解析这个名字的，它可能是外层表的列——给一张表建一个它自己并没有的列的索引，比不建更糟。仍然没做、而且报告里会明说的两件事：按派生表别名过滤的条件对不上物理表；没带括号的 `UNION` 后续分支依然不参与判定。
 
+**一个函数索引让整份 schema 文件读不进来。** MySQL 对表达式型的索引键写的是 `COLUMN_NAME = NULL`——函数索引、JSON 多值索引、或者 `(user_id, UPPER(status))` 的第二段都是——所以 `examples/schema-dump.sql` 合法地产出 `"columns": [null]`，而 loader 当年把索引键校验成 `string[]`。校验是整体通过或整体失败，于是库里只要有一个这种索引，结果就是 `schema 校验失败` 加上一条需要 schema 的规则都没跑。同一类错误在这个文件里其实已经修过一次（`length` / `charset` 的 null），反复出现的原因不是粗心而是 fixture：手写的 `schema.json` 永远不会包含作者没想到的形状，所以 `tests/fixtures/schema-functional.json` 现在是一份真实的 8.0.46 导出。`null` 是合法的索引键，含义是"这一段没有列名"：它不能服务普通列查找，SIA003 与 SIA007 遇到它就退开，SIA001 需要念出这种索引时打印 `〈表达式〉` / `(expression)`，不是 `null` 这个词。
+
+**而且它会把同一个索引再推荐一遍。** 按 SIA004 的建议建好函数索引、重新导出 schema、再跑一次：`ALTER TABLE orders ADD INDEX idx_orders_create_time …` 原样回来了，落到迁移文件里就是一条 `ERROR 1061` 重复索引名。表达式正文存在 `EXPRESSION` 这一列，而 5.7 没有这一列，共用的 dump 读不到它，于是只剩名字可对齐：现在这张表上如果已经有与本条建议同名的索引，就不再给 DDL、降级为 `warn`，并且文案里明说"这是按名字对齐，不是证明"，让人用 `SHOW INDEX` 自己确认。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
@@ -267,7 +271,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-270 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+283 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句——其中三成自带一个相关的 `IN (SELECT ...)` 或 `EXISTS (SELECT ...)`——再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不给任何语句都没点过名的表建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句；另有一份从真实 8.0.46 导出的 `schema.json`，里面带着函数索引、JSON 多值索引和全文索引——这些正是手写 fixture 想不到的形状。
 
 ## 许可
 

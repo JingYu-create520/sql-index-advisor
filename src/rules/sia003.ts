@@ -13,7 +13,7 @@ import {
   bucketByTable,
   truncateSql,
 } from "./helpers.js";
-import { findTable } from "../schema/loader.js";
+import { findTable, onlyPlainParts } from "../schema/loader.js";
 
 const RULE_ID = "SIA003";
 
@@ -36,7 +36,10 @@ export const sia003: Rule = {
       );
       if (used.size === 0) continue;
 
-      for (const index of table.indexes) {
+      // An expression key part (functional / multi-valued index) has no column name
+      // to line up against the query, so where the "left prefix" ends and where the
+      // "gap" begins is unknowable. This rule stays out of those indexes.
+      for (const index of table.indexes.filter(onlyPlainParts)) {
         if (index.columns.length < 2) continue;
 
         let run = 0;

@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.14 — 2026-09-22
+
+Found by doing the one thing the tool tells you to do: create the functional index
+it recommended, re-export the schema, and run it again. Verified on a live MySQL
+8.0.46.
+
+### Fixed
+
+- **One functional index made the whole `schema.json` unreadable.** MySQL reports
+  `COLUMN_NAME = NULL` for an expression key part — a functional index
+  (`(DATE(create_time))`), a multi-valued JSON index, or the second part of
+  `(user_id, UPPER(status))` — so `examples/schema-dump.sql` legitimately emits
+  `"columns": [null]`, and the loader's `z.array(z.string())` rejected it. Because
+  validation is all-or-nothing, that single index cost every schema-gated rule: the
+  output was `schema 校验失败` and nothing else. This is the second time the same
+  mistake bit the same file — the first was `.optional()` rejecting the nulls
+  `information_schema` produces for length and charset, which 0.1.x already fixed.
+  `null` is now a valid key part, and rules treat it as what it is: a part with no
+  column name, which cannot serve a plain-column lookup and cannot be named in DDL.
+  SIA003 and SIA007 stay out of such indexes, and SIA001 prints one as
+  `〈表达式〉` / `(expression)` rather than as the word `null`.
+- **SIA004 recommended the same index after you had created it.** With
+  `idx_orders_create_time` in place, the rule still emitted
+  `ALTER TABLE orders ADD INDEX idx_orders_create_time ((DATE(create_time)))`, so
+  following the advice produced a second run that repeated itself and a migration
+  file that fails on duplicate key name. The advice is now suppressed when the table
+  already carries an index with the name this advice would use, the finding drops to
+  `warn`, and the message says plainly that a name match is not proof — an
+  expression key part has no readable text in `information_schema` for a dump that
+  still has to run on 5.7, where the `EXPRESSION` column does not exist at all.
+  Confirm with `SHOW INDEX`, which the message says too.
+
+### Added
+
+- `tests/fixtures/schema-functional.json` — a dump taken from the live 8.0.46 probe
+  database, containing a functional index, a multi-valued JSON index, a mixed
+  (column, expression) index, a FULLTEXT index, and the index this tool's own advice
+  creates after that advice has been applied. `tests/functional-index.test.ts` and
+  three new SIA004 cases pin the behaviour. The reason this class of defect keeps
+  being found late is fixtures: a hand-written schema never contains the shapes the
+  author did not think of.
+
+### Verified
+
+`node dist/cli.js query … --schema <live dump>` over the 8.0.46 dump before and after
+the fix (before: rejected; after: one `warn`, no repeated DDL), the same statement run
+against `--mysql-version 5.7` (no functional DDL either way), and both example runs
+unchanged at 6 and 9 suggestions. 283 tests pass.
+
 ## 0.1.13 — 2026-09-22
 
 Closes the one miss the previous release documented instead of fixing: a table that

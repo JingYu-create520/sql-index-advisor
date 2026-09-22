@@ -12,6 +12,7 @@ import type {
   Rule,
   RuleContext,
   RuleOptions,
+  SchemaIndex,
   SchemaTable,
 } from "../core/types.js";
 import {
@@ -24,7 +25,7 @@ import {
   truncateSql,
   type TableBucket,
 } from "./helpers.js";
-import { findTable } from "../schema/loader.js";
+import { findTable, describeIndexParts } from "../schema/loader.js";
 
 const RULE_ID = "SIA001";
 
@@ -182,7 +183,10 @@ function candidateColumns(bucket: TableBucket, table?: SchemaTable): string[] {
  */
 function singlePrimaryKey(table: SchemaTable | undefined): string | undefined {
   const pk = table?.indexes.find((i) => i.primary);
-  return pk && pk.columns.length === 1 ? pk.columns[0] : undefined;
+  // `?? undefined` rather than a cast: MySQL will not let a functional key part be
+  // the primary key, but a hand-written schema.json can say anything, and a null
+  // here must mean "no single-column primary key", not "a key named null".
+  return pk && pk.columns.length === 1 ? pk.columns[0] ?? undefined : undefined;
 }
 
 /**
@@ -343,7 +347,7 @@ function buildMessage(
   bucket: TableBucket,
   usable: string[],
   dropped: string[],
-  prefixHit: { name: string; columns: string[] } | undefined,
+  prefixHit: SchemaIndex | undefined,
   hasTable: boolean,
   schemaSupplied: boolean,
 ): string {
@@ -353,7 +357,7 @@ function buildMessage(
   ];
   if (prefixHit) {
     parts.push(
-      `已有索引 ${prefixHit.name}(${prefixHit.columns.join(", ")}) 只覆盖前缀，新索引可用后可评估是否下线旧索引以减少写放大。`,
+      `已有索引 ${prefixHit.name}(${describeIndexParts(prefixHit, "zh")}) 只覆盖前缀，新索引可用后可评估是否下线旧索引以减少写放大。`,
     );
   }
   if (dropped.length > 0) {
@@ -379,7 +383,7 @@ function buildMessageEn(
   bucket: TableBucket,
   usable: string[],
   dropped: string[],
-  prefixHit: { name: string; columns: string[] } | undefined,
+  prefixHit: SchemaIndex | undefined,
   hasSchema: boolean,
   schemaSupplied: boolean,
 ): string {
@@ -395,7 +399,7 @@ function buildMessageEn(
     );
   } else if (prefixHit) {
     parts.push(
-      `Existing index ${prefixHit.name}(${prefixHit.columns.join(", ")}) covers only a left prefix of the proposed one; ` +
+      `Existing index ${prefixHit.name}(${describeIndexParts(prefixHit, "en")}) covers only a left prefix of the proposed one; ` +
         `evaluate dropping it once the new index is live, since keeping both doubles the write cost.`,
     );
   } else {

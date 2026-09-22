@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { sia004 } from "../src/rules/sia004.js";
-import { ddls, runRule, TEST_SCHEMA } from "./support.js";
+import { ddls, FUNCTIONAL_SCHEMA, runRule, TEST_SCHEMA } from "./support.js";
 
 describe("SIA004 function or expression on an indexed column", () => {
   it("positive: DATE(col) = literal rewrites into a half-open range", () => {
@@ -137,5 +137,51 @@ describe("SIA004 function or expression on an indexed column", () => {
     // arbitrary DATE_FORMAT pattern, so there is no rewrite to hand over.
     expect(findings[0]?.severity).toBe("warn");
     expect(findings[0]?.rewrite).toBeUndefined();
+  });
+});
+
+describe("SIA004 stops asking for an index that is already there", () => {
+  // FUNCTIONAL_SCHEMA is a real 8.0.46 dump taken *after* the DDL this rule emits
+  // was applied, which is exactly the state that used to produce the same
+  // `ADD INDEX` again on the next run - and a migration file that then fails on
+  // duplicate key name.
+  it("suppresses the DDL once the advice has been followed", () => {
+    const findings = runRule(
+      sia004,
+      "SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17'",
+      { schema: FUNCTIONAL_SCHEMA },
+    );
+    expect(findings).toHaveLength(1);
+    const [finding] = findings;
+    expect(ddls(findings)).toEqual([]);
+    expect(finding?.severity).toBe("warn");
+    // The rewrite is still worth having: it is the other way to make this sargable.
+    expect(finding?.rewrite).toContain("create_time >=");
+    expect(finding?.message).toContain("idx_orders_create_time");
+    expect(finding?.messageEn).toContain("idx_orders_create_time");
+    expect(finding?.messageEn).toContain("not proof");
+  });
+
+  it("still asks when no index carries that name", () => {
+    const [finding] = runRule(
+      sia004,
+      "SELECT id FROM orders WHERE UPPER(status) = 'PAID'",
+      { schema: FUNCTIONAL_SCHEMA },
+    );
+    expect(finding?.suggestedDDL).toEqual([
+      "ALTER TABLE `orders` ADD INDEX `idx_orders_status` ((UPPER(status)));",
+    ]);
+  });
+
+  it("is unchanged against a schema without the index", () => {
+    const [finding] = runRule(
+      sia004,
+      "SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17'",
+      { schema: TEST_SCHEMA },
+    );
+    expect(finding?.suggestedDDL).toEqual([
+      "ALTER TABLE `orders` ADD INDEX `idx_orders_create_time` ((DATE(create_time)));",
+    ]);
+    expect(finding?.severity).toBe("error");
   });
 });

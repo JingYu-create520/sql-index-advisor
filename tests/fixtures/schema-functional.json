@@ -1,0 +1,132 @@
+{
+ "mysqlVersion": "8.0.46",
+ "tables": [
+  {
+   "name": "orders",
+   "engine": "InnoDB",
+   "charset": "utf8mb4",
+   "rowCountEstimate": 2,
+   "columns": [
+    {
+     "name": "id",
+     "type": "bigint",
+     "length": null,
+     "charset": null,
+     "nullable": false
+    },
+    {
+     "name": "user_id",
+     "type": "bigint",
+     "length": null,
+     "charset": null,
+     "nullable": false
+    },
+    {
+     "name": "create_time",
+     "type": "datetime",
+     "length": null,
+     "charset": null,
+     "nullable": true
+    },
+    {
+     "name": "status",
+     "type": "varchar",
+     "length": 16,
+     "charset": "utf8mb4",
+     "nullable": true
+    },
+    {
+     "name": "tags",
+     "type": "json",
+     "length": null,
+     "charset": null,
+     "nullable": true
+    }
+   ],
+   "indexes": [
+    {
+     "name": "ft_status",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      "status"
+     ],
+     "subParts": [
+      null
+     ]
+    },
+    {
+     "name": "idx_ct",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      null
+     ],
+     "subParts": [
+      null
+     ]
+    },
+    {
+     "name": "idx_mixed",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      "user_id",
+      null
+     ],
+     "subParts": [
+      null,
+      null
+     ]
+    },
+    {
+     "name": "idx_orders_create_time",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      null
+     ],
+     "subParts": [
+      null
+     ]
+    },
+    {
+     "name": "idx_tags",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      null
+     ],
+     "subParts": [
+      null
+     ]
+    },
+    {
+     "name": "idx_user_status",
+     "unique": false,
+     "primary": false,
+     "columns": [
+      "user_id",
+      "status"
+     ],
+     "subParts": [
+      null,
+      null
+     ]
+    },
+    {
+     "name": "PRIMARY",
+     "unique": true,
+     "primary": true,
+     "columns": [
+      "id"
+     ],
+     "subParts": [
+      null
+     ]
+    }
+   ]
+  }
+ ],
+ "note": "Dumped with examples/schema-dump.sql from a live MySQL 8.0.46 database whose orders table carries a functional index (DATE(create_time)), a multi-valued JSON index (CAST(tags AS CHAR(64) ARRAY)), a mixed index whose second key part is an expression (user_id, UPPER(status)), a FULLTEXT index, and idx_orders_create_time - the functional index this tool itself recommends for WHERE DATE(create_time) = ?, applied here to show the second run no longer asks for it. MySQL reports COLUMN_NAME = NULL for every expression key part."
+}

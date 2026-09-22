@@ -4,11 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   columnKeyBytes,
+  describeIndexParts,
   findColumn,
   findTable,
   hasUsablePrefix,
+  onlyPlainParts,
   validateSchema,
 } from "../src/schema/loader.js";
+import type { SchemaIndex } from "../src/core/types.js";
 import { loadInput } from "../src/core/input.js";
 
 const valid = {
@@ -60,6 +63,54 @@ describe("validateSchema: the real schema-dump.sql output", () => {
     expect(columnKeyBytes(remark!)).toBe(Infinity);
     const orderId = findColumn(findTable(validateSchema(doc).schema, "order_item"), "order_id");
     expect(columnKeyBytes(orderId!)).toBe(8);
+  });
+});
+
+describe("a functional index does not poison the file", () => {
+  // Dumped by examples/schema-dump.sql from a live MySQL 8.0.46 whose table carries
+  // `CREATE INDEX idx_ct ON orders ((DATE(create_time)))` and a multi-valued
+  // `CAST(tags AS CHAR(64) ARRAY)` index. Both report `COLUMN_NAME = NULL`, which
+  // the loader used to reject outright - and SIA004 is the rule that tells people to
+  // create a functional index, so following the advice broke the next run.
+  const doc = JSON.parse(readFileSync("tests/fixtures/schema-functional.json", "utf8"));
+
+  it("loads, and keeps the null key part rather than dropping it", () => {
+    const { schema, errors } = validateSchema(doc);
+    expect(errors).toEqual([]);
+    const orders = findTable(schema, "orders");
+    const functional = orders?.indexes.find((i) => i.name === "idx_ct");
+    expect(functional?.columns).toEqual([null]);
+    // A dropped null would have read as an index with no parts, and one shortened
+    // prefix would let a rule claim coverage the server does not give.
+    expect(orders?.indexes.find((i) => i.name === "idx_user_status")?.columns).toEqual([
+      "user_id",
+      "status",
+    ]);
+  });
+
+  it("treats an expression part as serving no column lookup", () => {
+    const orders = findTable(validateSchema(doc).schema, "orders");
+    // `DATE(create_time)` is not an index on `create_time`.
+    expect(hasUsablePrefix(orders, ["create_time"])).toBeUndefined();
+    // idx_mixed(user_id, UPPER(status)) is hit first, and it is a fair hit: its
+    // *first* key part is the column the query filters on. An expression part only
+    // breaks coverage from its own position onwards.
+    expect(hasUsablePrefix(orders, ["user_id"])?.name).toBe("idx_mixed");
+    expect(hasUsablePrefix(orders, ["user_id", "status"])?.name).toBe("idx_user_status");
+    expect(orders!.indexes.filter(onlyPlainParts).map((i) => i.name)).toEqual([
+      "ft_status",
+      "idx_user_status",
+      "PRIMARY",
+    ]);
+  });
+
+  it("prints an expression part as one, never as the word null", () => {
+    const functional: SchemaIndex = { name: "idx_ct", columns: [null] };
+    const mixed: SchemaIndex = { name: "idx_mix", columns: ["user_id", null] };
+    expect(describeIndexParts(functional, "en")).toBe("(expression)");
+    expect(describeIndexParts(mixed, "zh")).toBe("user_id, 〈表达式〉");
+    // An index this narrow is what the DDL builders are allowed to consume.
+    expect(onlyPlainParts(mixed)).toBe(false);
   });
 });
 

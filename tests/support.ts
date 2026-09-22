@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { Finding, QueryMetrics, QueryRecord, Rule, RuleOptions, Schema } from "../src/core/types.js";
 import { DEFAULT_RULE_OPTIONS } from "../src/core/types.js";
 import { parseSql } from "../src/parsers/sql.js";
@@ -71,6 +73,15 @@ export const TEST_SCHEMA: Schema = validateSchema({
     },
   ],
 }).schema!;
+
+/**
+ * The live 8.0.46 dump that carries an expression key part: a functional index, a
+ * multi-valued JSON index, and `idx_mixed(user_id, UPPER(status))` whose *second*
+ * part is an expression. Everything a rule must refuse to name is in here.
+ */
+export const FUNCTIONAL_SCHEMA: Schema = validateSchema(
+  JSON.parse(readFileSync("tests/fixtures/schema-functional.json", "utf8")),
+).schema!;
 
 export interface RunOptions {
   schema?: Schema;
