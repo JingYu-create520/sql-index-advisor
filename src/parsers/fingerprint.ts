@@ -46,8 +46,12 @@ export function stripComments(sql: string): string {
       continue;
     }
 
-    // line comments: `-- ...` (needs the space) and `# ...`
-    if ((ch === "-" && sql[i + 1] === "-" && (sql[i + 2] === " " || sql[i + 2] === "\t")) || ch === "#") {
+    // Line comments: `-- ...` (needs the space) and `# ...`. A `#{` is not a
+    // comment: it is a MyBatis bind parameter, which `tokenize` deliberately
+    // keeps as an opaque param. Stripping from `#{` to end of line truncated
+    // every inline `WHERE user_id = #{id} AND status = 'PAID'` down to its first
+    // column, and the report then proposed an index that was too short.
+    if ((ch === "-" && sql[i + 1] === "-" && (sql[i + 2] === " " || sql[i + 2] === "\t")) || (ch === "#" && sql[i + 1] !== "{")) {
       const end = sql.indexOf("\n", i);
       i = end === -1 ? sql.length : end;
       continue;

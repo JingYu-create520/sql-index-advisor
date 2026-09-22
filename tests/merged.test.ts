@@ -101,4 +101,43 @@ describe("splitStatements: the ';' contract the MCP tool advertises", () => {
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.every((f) => f.table === "order_item")).toBe(true);
   });
+
+  /**
+   * `#` opens a MySQL comment, but MyBatis writes `#{name}` for every bound
+   * parameter, and bound parameters are most of what this tool parses. Reading
+   * `#{` as a comment truncates the statement mid-WHERE, which is the one
+   * failure mode worse than a crash: the suggestion comes back shorter than the
+   * query, and nobody notices.
+   */
+  it("does not eat a MyBatis bind parameter as a # comment", () => {
+    const sql = "SELECT id FROM orders WHERE user_id = #{userId} AND status = 'PAID'";
+    expect(splitStatements(sql)).toEqual([sql]);
+
+    const loaded = loadInput(sql, { inline: true });
+    expect(loaded.records).toHaveLength(1);
+    expect(loaded.records[0]!.sql).toContain("status");
+    // `stripComments` used to delete from `#{` to the line break, so the evidence
+    // line, the fingerprint and the suggestion were all built from half a query.
+    expect(loaded.records[0]!.parsed.sql).toContain("status");
+
+    const { findings } = analyze(loaded.records);
+    expect(findings.find((f) => f.rule === "SIA001")?.indexColumns).toEqual(["user_id", "status"]);
+  });
+
+  it("keeps the whole predicate when a bind parameter sits mid-statement", () => {
+    const parsed = parseSql(
+      "UPDATE orders SET pay_time = NOW() WHERE status = #{state} AND shop_id = 7",
+    );
+    expect(parsed.notes.join(" ")).not.toContain("分号");
+    expect(parsed.tables.map((t) => t.name)).toEqual(["orders"]);
+    expect(parsed.sql).toContain("shop_id");
+  });
+
+  it("still treats a real # comment as a comment", () => {
+    expect(splitStatements("SELECT 1 FROM a # note ; here")).toEqual(["SELECT 1 FROM a # note ; here"]);
+    expect(splitStatements("SELECT 1 FROM a # one\n; SELECT 2 FROM b")).toEqual([
+      "SELECT 1 FROM a # one",
+      "SELECT 2 FROM b",
+    ]);
+  });
 });

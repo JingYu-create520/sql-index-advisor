@@ -102,7 +102,11 @@ export function splitStatements(text: string): string[] {
       i = end === -1 ? text.length : end + 1;
       continue;
     }
-    if ((ch === "-" && text[i + 1] === "-" && (text[i + 2] === " " || text[i + 2] === "\t")) || ch === "#") {
+    // `#` starts a MySQL comment, but `#{...}` is a MyBatis bind parameter and
+    // every input this tool eats is full of them. Treating `#{` as a comment
+    // would swallow the rest of the WHERE clause and quietly propose an index
+    // for the columns that happened to survive.
+    if ((ch === "-" && text[i + 1] === "-" && (text[i + 2] === " " || text[i + 2] === "\t")) || (ch === "#" && text[i + 1] !== "{")) {
       const end = text.indexOf("\n", i);
       i = end === -1 ? text.length : end - 1;
       continue;
