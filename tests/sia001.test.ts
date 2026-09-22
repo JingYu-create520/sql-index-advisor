@@ -174,4 +174,38 @@ describe("SIA001 missing index candidate", () => {
     expect(finding?.sql).toContain("order_item");
     expect(finding?.fingerprint).toBe(record("SELECT id FROM order_item WHERE sku_id = 1").fingerprint);
   });
+
+  /**
+   * `device_message_${deviceId}` is how a real project names its sharded tables.
+   * By the time the parser is done, the name is a stub with no physical table
+   * behind it, so the only honest output is an explanation with no DDL: the
+   * migration this used to emit failed with "table doesn't exist" on import.
+   */
+  it("negative: a table name built at runtime gets an explanation, not DDL", () => {
+    const findings = runRule(sia001, "SELECT id FROM device_message_ WHERE tenant_id = 5");
+    expect(findings).toHaveLength(1);
+    const finding = findings[0]!;
+    expect(finding.severity).toBe("info");
+    expect(finding.suggestedDDL).toEqual([]);
+    expect(finding.message).toContain("运行时拼出来");
+    expect(finding.messageEn).toContain("built at runtime");
+  });
+
+  /**
+   * The advice was fine; the sentence beside it was wrong. It told people to pass
+   * --schema when they had passed one and the table simply was not in it, which
+   * is a different problem with a different fix.
+   */
+  it("distinguishes 'no schema' from 'this table is not in your schema'", () => {
+    const without = runRule(sia001, "SELECT id FROM orders WHERE shop_id = 1");
+    expect(without[0]?.messageEn).toContain("Pass --schema");
+
+    const missingTable = runRule(sia001, "SELECT id FROM invoice_lines WHERE customer_id = 1", {
+      schema: TEST_SCHEMA,
+    });
+    expect(missingTable).toHaveLength(1);
+    expect(missingTable[0]?.messageEn).toContain("is not among the tables in the schema.json");
+    expect(missingTable[0]?.messageEn).not.toContain("Pass --schema");
+    expect(missingTable[0]?.message).toContain("不在你给的 schema.json");
+  });
 });

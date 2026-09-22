@@ -110,4 +110,32 @@ describe("SIA004 function or expression on an indexed column", () => {
       [],
     );
   });
+
+  /**
+   * A wrapped column only matters where it is being tested. This statement formats
+   * a date for output while its WHERE clause stays a clean range, and the old
+   * answer told the user that their usable index was unusable.
+   */
+  it("negative: a function in the projection is not a predicate problem", () => {
+    expect(
+      runRule(
+        sia004,
+        "SELECT DATE_FORMAT(pay_time, '%Y-%m-%d') AS d, COUNT(*) FROM orders WHERE pay_time >= '2026-01-01' AND pay_time < '2026-02-01' GROUP BY d",
+        { schema: TEST_SCHEMA },
+      ),
+    ).toEqual([]);
+  });
+
+  it("positive: the same function in the WHERE is still reported", () => {
+    const findings = runRule(
+      sia004,
+      "SELECT id FROM orders WHERE DATE_FORMAT(pay_time, '%Y-%m-%d') = '2026-01-05'",
+      { schema: TEST_SCHEMA },
+    );
+    expect(findings).toHaveLength(1);
+    // warn rather than error: no provably equivalent range exists for an
+    // arbitrary DATE_FORMAT pattern, so there is no rewrite to hand over.
+    expect(findings[0]?.severity).toBe("warn");
+    expect(findings[0]?.rewrite).toBeUndefined();
+  });
 });
