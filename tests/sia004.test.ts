@@ -61,6 +61,21 @@ describe("SIA004 function or expression on an indexed column", () => {
     });
     expect(finding?.suggestedDDL).toEqual([]);
     expect(finding?.message).toContain("5.7 不支持函数索引");
+    // The English field used to offer the functional index unconditionally, so a
+    // `--lang en` or JSON reader on 5.7 was told to do something the server
+    // cannot do, in the same run where no such DDL was emitted.
+    expect(finding?.messageEn).toContain("5.7 has no functional index");
+    expect(finding?.messageEn).not.toContain("or add a functional index");
+  });
+
+  it("8.0 offers the functional index in both languages", () => {
+    const [finding] = runRule(sia004, "SELECT id FROM orders WHERE DATE(create_time) = '2026-09-17'", {
+      schema: TEST_SCHEMA,
+      options: { mysqlVersion: 8.0 },
+    });
+    expect(finding?.suggestedDDL.join(" ")).toContain("((DATE(create_time)))");
+    expect(finding?.message).toContain("MySQL 8.0 可用函数索引");
+    expect(finding?.messageEn).toContain("MySQL 8.0 can index the expression");
   });
 
   it("negative: a bare column predicate is fine", () => {

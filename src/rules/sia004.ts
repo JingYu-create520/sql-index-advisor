@@ -22,6 +22,8 @@ const RULE_ID = "SIA004";
 interface Rewrite {
   predicate: string;
   why: string;
+  /** Same argument in English: `messageEn` must not be thinner than `message`. */
+  whyEn: string;
 }
 
 export const sia004: Rule = {
@@ -71,7 +73,20 @@ export const sia004: Rule = {
           ]
             .filter(Boolean)
             .join(" "),
-          messageEn: `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use; rewrite as a range or add a functional index.`,
+          messageEn: [
+            `Expression \`${ref.raw}\` on ${bucket.table}.${ref.column} prevents index use: the index holds the raw value, so no index on that column can serve this predicate.`,
+            rewrite
+              ? `Rewrite it as: ${rewrite.predicate} (${rewrite.whyEn}).`
+              : `No equivalent rewrite is provable for this shape, so a functional index is the only way out.`,
+            options.mysqlVersion >= 8
+              ? `MySQL 8.0 can index the expression itself with ((${ref.raw})), but only a query written with exactly that expression will match it; 5.7 cannot.`
+              : `MySQL 5.7 has no functional index, so rewriting the query is the only option.`,
+            functionalDdl.length === 0 && !rewrite
+              ? `No DDL was generated: this input has no --schema, or the target version is below 8.0.`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
         });
       }
     }
@@ -109,11 +124,13 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
       return {
         predicate: `${target} >= '${formatDate(day)}' AND ${target} < '${formatDate(next)}'`,
         why: "按天等值等价于左闭右开区间，可命中该列索引",
+        whyEn: "equality on one day is the same set as a half-open range over it, which the column index can serve",
       };
     }
     return {
       predicate: `${target} >= ? AND ${target} < DATE_ADD(?, INTERVAL 1 DAY)`,
       why: "绑定参数为日期时同样可改写为区间；注意两个 ? 传同一个值",
+      whyEn: "a bound date parameter rewrites the same way; both ? must carry the same value",
     };
   }
 
@@ -125,11 +142,13 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
       return {
         predicate: `${target} >= '${yearValue}-01-01 00:00:00' AND ${target} < '${yearValue + 1}-01-01 00:00:00'`,
         why: "按年等值等价于该年左闭右开区间",
+        whyEn: "equality on a year is the same set as that year as a half-open range",
       };
     }
     return {
       predicate: `${target} >= MAKEDATE(YEAR(?), 1) AND ${target} < MAKEDATE(YEAR(?) + 1, 1)`,
       why: "参数化场景改写为区间",
+      whyEn: "range form for the parameterised case",
     };
   }
 
@@ -141,9 +160,10 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
       return {
         predicate: `${target} LIKE '${escaped}%'`,
         why: "取前缀后等值等价于前缀 LIKE，右前缀 LIKE 可用索引",
+        whyEn: "comparing a fixed prefix is the same predicate as a LIKE that ends in %, and a leading-anchor LIKE is sargable",
       };
     }
-    return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "前缀匹配改写" };
+    return { predicate: `${target} LIKE CONCAT(?, '%')`, why: "前缀匹配改写", whyEn: "prefix match rewritten as a LIKE" };
   }
 
   // `col + 1 = 5` / `col * 2 > 10`: move the arithmetic to the right-hand side.
@@ -155,6 +175,7 @@ function buildRewrite(ref: ColumnRef): Rewrite | undefined {
       return {
         predicate: `${colPart} ${ref.op} ${rhs}`,
         why: "把运算移到右边，左边保持裸列",
+        whyEn: "the arithmetic moves to the right side so the left side stays a bare column",
       };
     }
   }
