@@ -241,7 +241,7 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
 
 - `examples/schema-dump.sql` 已在真实 MySQL **8.0.46** 和 **5.7.44** 上跑通，用的是一套真实的 76 张表的库（某个电商项目自己的导出），两边产出的表、列、索引清单一致，`loadSchema` 两种都能接受。让 5.7 跑通的办法是去掉一个引用了外层列的派生表，那东西叫 `LATERAL`，5.7 没有：改之前它在 5.7 上直接 `ERROR 1054 Unknown column 'tab.TABLE_SCHEMA'`。
 - 上手那一节里的演示库 `examples/seed-schema.sql` **只支持 8.0**：造数用了 `WITH RECURSIVE` 和 `cte_max_recursion_depth`，5.7 两样都没有。这是演示数据的要求，不是工具的要求。
-- GitHub Action 的注解字符串只在本地断言过。这个 Action 还没有在任何人的 PR 上作为状态检查跑过。
+- GitHub Action 已经在本仓库自己的 pull request 上跑过（`Index review` 那个检查），它的安装步骤、对 PATH 的依赖、"绿着但什么都没做"以及退出码处理，全是在那几次运行里被发现并修掉的。还没有在别人的仓库里被采用，所以跟这里不同的 checkout 路径或 npm 环境仍然算未验证。
 - MCP server 在测试里完成了真实的 stdio `initialize` → `tools/list` → `tools/call` 握手，但没有在某个具体桌面客户端里配置过。
 
 如果你撞上以上任何一条，一条带你实际执行命令的 issue，比一个 star 对这个项目更有用。

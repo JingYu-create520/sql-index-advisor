@@ -18,8 +18,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a message saying what to pass as `cli`, instead of letting Node fail on a
   half-split module path.
 
-Proved by re-running the workflow on this repository's own pull request: attempt 3
-produced 8 annotations but failed the job; the fix is what this release is.
+Proved on this repository's own pull request, which is the only place this class of
+bug can be seen: attempt 1 died in the install, attempt 2 reported green while doing
+nothing, attempt 3 produced 8 annotations and still failed the job, attempt 4 is
+green with the annotations.
 
 ## 0.1.8 — 2026-09-22
 

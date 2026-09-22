@@ -251,7 +251,7 @@ These last two came from running the tool against somebody else's code rather th
 
 - `examples/schema-dump.sql` is confirmed against live MySQL **8.0.46** and **5.7.44** on a real 76-table schema (an e-commerce project's own dump), producing the same table, column and index lists on both, and `loadSchema` accepts either. Getting 5.7 to work meant removing a derived table that referenced an outer column, which is `LATERAL`, which 5.7 does not have: the previous version failed there with `ERROR 1054 Unknown column 'tab.TABLE_SCHEMA'`.
 - `examples/seed-schema.sql`, the demo database in the quickstart above, is **8.0 only**: it generates rows with `WITH RECURSIVE` and `cte_max_recursion_depth`, neither of which exists on 5.7. That is the demo data, not the tool.
-- The GitHub Action's annotation strings are asserted locally. The Action has not run as a status check on anyone's pull request.
+- The GitHub Action has run on this repository's own pull requests, in the `Index review` check, and that is how its install step, its PATH assumption, its silent-green failure and its exit-code handling were all found and fixed. It has not been adopted inside somebody else's repository, so a checkout path or npm setup unlike the one here is still untested.
 - The MCP server answers a real stdio `initialize` → `tools/list` → `tools/call` handshake in tests. It has not been configured inside a specific desktop client.
 
 If you hit one of these, an issue containing the exact command you ran is worth more to this project than a star.
