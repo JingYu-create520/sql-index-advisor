@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.2](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.2) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.3](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.3) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -229,11 +229,18 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
       covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
 ```
 
+**主键的 IN 列表本身就是访问路径。** 一个真实开源项目的批量更新 `WHERE id IN ( ? ) AND status = 1`，曾经换来一条 `ADD INDEX (status, id)`。按这个列表读主键是引擎本来就会做的事，`WHERE` 里其余条件只是在它已经取到的行上过滤，所以那条建议是一条没人会选的索引结构。SIA001 现在跳过它，回归用例就是这条语句。边界也说清：`IN (子查询)` 仍然会报，因为那种列表没有静态上界，二级索引可能真的更优。
+
+**英文文案推荐了 5.7 做不到的事。** `--mysql-version 5.7` 正确地没有生成函数索引的 DDL，中文说明也讲清了原因，但 `messageEn` 是一句写死的话，结尾是 "rewrite as a range or add a functional index"。这和上面那类翻译缺口是同一个毛病：中文那条加了版本分支，英文那条还是常量，于是读 JSON 或 `--lang en` 的人被告知去建自己服务器上根本不存在的索引。现在两边都按版本分支，"为什么这样改写等价"的解释也两种语言都有，不再只有中文有。
+
+最后这两条是拿**别人的代码**跑出来的，不是自己的用例：`macrozheng/mall`（104 个手写 MyBatis DAO 文件，外加它自己的生产库结构导进真实 MySQL）。由写解析器的那颗脑子写的 fixture，只会重复这颗脑子的假设。
+
 **这些修复解决不了的。** 标志位判定读的是列名和类型，不是数据。40 个取值的 `status` 和只有 2 个取值的 `status` 拿到同样的警告，真正偏斜到只有一行为真的列也拿到同样的警告。最显然的升级路径（直接读数据库自己的统计信息）已经实测过并否决：`information_schema.STATISTICS.CARDINALITY` 对一个真实只有 2 个取值的列报 1，`ANALYZE TABLE` 前后都是 1，对一张刚灌进 10 万行的表则给主键报 42。它是按索引前缀的采样估计，而低基数恰好是它最不准的场景。唯一能给对答案的 `information_schema.COLUMN_STATISTICS` 只有 8.0 有，而且在有人对那一列显式跑过 `ANALYZE TABLE ... UPDATE HISTOGRAM` 之前是空的。完整数字见 [docs/rules.md](docs/rules.md)。所以这个缺口留着，由建议旁边那条区分度 SQL 逐条补，而不是由规则假装知道。
 
 ## 尚未验证的部分
 
-- `examples/schema-dump.sql` 只在真实 MySQL 8.0.46 上跑通过。5.7 从未执行过，`--mysql-version 5.7` 改的是本工具输出的 DDL 文本，不构成对 5.7 服务器的任何证据。
+- `examples/schema-dump.sql` 已在真实 MySQL **8.0.46** 和 **5.7.44** 上跑通，用的是一套真实的 76 张表的库（某个电商项目自己的导出），两边产出的表、列、索引清单一致，`loadSchema` 两种都能接受。让 5.7 跑通的办法是去掉一个引用了外层列的派生表，那东西叫 `LATERAL`，5.7 没有：改之前它在 5.7 上直接 `ERROR 1054 Unknown column 'tab.TABLE_SCHEMA'`。
+- 上手那一节里的演示库 `examples/seed-schema.sql` **只支持 8.0**：造数用了 `WITH RECURSIVE` 和 `cte_max_recursion_depth`，5.7 两样都没有。这是演示数据的要求，不是工具的要求。
 - GitHub Action 的注解字符串只在本地断言过。这个 Action 还没有在任何人的 PR 上作为状态检查跑过。
 - MCP server 在测试里完成了真实的 stdio `initialize` → `tools/list` → `tools/call` 握手，但没有在某个具体桌面客户端里配置过。
 
@@ -249,7 +256,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-223 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+226 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.2](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.2) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.3](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.3) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
@@ -236,11 +236,18 @@ warn  SIA001  Candidate index for orders (user_id, shop_id), ordered equality ->
       covers only a left prefix of the proposed one; evaluate dropping it once the new index is live.
 ```
 
+**A primary key `IN` list is already the access path.** A real open-source project's batch update, `WHERE id IN ( ? ) AND status = 1`, drew `ADD INDEX (status, id)`. Reading the primary key for that list is what the engine does anyway, and every other predicate in that `WHERE` filters rows it already holds, so the proposal was a structure nobody would choose. SIA001 now skips it, and the regression test uses that statement. Note the boundary: `IN (subquery)` is still reported, because there the list has no static bound and a secondary index can genuinely win.
+
+**The English text recommended something 5.7 cannot do.** `--mysql-version 5.7` correctly withheld the functional-index DDL, and the Chinese explanation said why, but `messageEn` was a fixed sentence ending "rewrite as a range or add a functional index". Same class as the translation gap above: the Chinese string grew a version branch and the English one stayed a constant, so a JSON or `--lang en` reader was told to create an index their server does not support. Both fields are gated now, and the reason a rewrite is equivalent exists in both languages instead of only in Chinese.
+
+These last two came from running the tool against somebody else's code rather than our own fixtures: `macrozheng/mall` (104 hand-written MyBatis DAO files, its production schema imported into a live MySQL). Fixtures written by the same mind that writes the parser only repeat that mind's assumptions.
+
 **What none of this fixes.** Flag detection reads names and column types, never data. A `status` column with 40 distinct values gets the same caution as a 2-valued one, and a genuinely skewed 2-valued column gets the same caution as a uniform one. The obvious upgrade, reading the database's own statistics, was measured and rejected: `information_schema.STATISTICS.CARDINALITY` reported 1 for a column with 2 distinct values, both before and after `ANALYZE TABLE`, and 42 for the primary key of a table that had just been loaded with 100,000 rows. It estimates per index prefix, and low-cardinality columns are where it is worst. The only source that gets it right, `information_schema.COLUMN_STATISTICS`, is 8.0-only and empty until someone runs `ANALYZE TABLE ... UPDATE HISTOGRAM` on that specific column. Full numbers in [docs/rules.md](docs/rules.md). So the gap stays, and it is closed per finding by the selectivity query printed next to the suggestion.
 
 ## What has not been verified
 
-- `examples/schema-dump.sql` is confirmed against a live MySQL 8.0.46. It has never been run on 5.7; `--mysql-version 5.7` only changes the DDL text this tool emits, it is not evidence about a 5.7 server.
+- `examples/schema-dump.sql` is confirmed against live MySQL **8.0.46** and **5.7.44** on a real 76-table schema (an e-commerce project's own dump), producing the same table, column and index lists on both, and `loadSchema` accepts either. Getting 5.7 to work meant removing a derived table that referenced an outer column, which is `LATERAL`, which 5.7 does not have: the previous version failed there with `ERROR 1054 Unknown column 'tab.TABLE_SCHEMA'`.
+- `examples/seed-schema.sql`, the demo database in the quickstart above, is **8.0 only**: it generates rows with `WITH RECURSIVE` and `cte_max_recursion_depth`, neither of which exists on 5.7. That is the demo data, not the tool.
 - The GitHub Action's annotation strings are asserted locally. The Action has not run as a status check on anyone's pull request.
 - The MCP server answers a real stdio `initialize` → `tools/list` → `tools/call` handshake in tests. It has not been configured inside a specific desktop client.
 
@@ -256,7 +263,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-223 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+226 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 

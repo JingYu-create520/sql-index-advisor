@@ -54,6 +54,8 @@ ALTER TABLE `orders` ADD INDEX `idx_orders_remark` (`remark`(64));
 SELECT COUNT(DISTINCT LEFT(remark, 64)) / COUNT(DISTINCT remark) AS ratio FROM orders;
 ```
 
+建议长度另有一道**实践上限 128 个字符**：比这更长的前缀通常已经越过区分度拐点，而工具看不到数据，所以宁可给短，把"要不要更长"交回给上面那条 SQL。字节预算（8.0 的 3072 / 5.7 的 767，以及你用 `--prefix-bytes` 传进来的值）是硬上限——把它调小会真的缩短建议长度，调大则不会突破 128。
+
 ## SIA003 · 最左前缀违反 · S
 
 **触发**：查询用到了复合索引的靠前列，跳过了中间列，却直接用了更靠后的列。

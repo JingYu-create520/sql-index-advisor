@@ -172,6 +172,17 @@ export function bytesPerChar(table: SchemaTable | undefined): number {
   return charsetBytes(table?.charset ?? "utf8mb4");
 }
 
+/**
+ * Asking price, in characters, for a prefix index. The byte budget below is the
+ * hard ceiling; this is the practical one. Past roughly 128 characters a prefix
+ * is already longer than what distinguishes most strings, and this tool cannot
+ * measure distinctness because it never connects, so it asks for a short prefix
+ * and prints the ratio query for you to check. Keeping the two separate also
+ * means `--prefix-bytes` shrinks the suggestion when you lower it, instead of the
+ * version budget silently overriding everything.
+ */
+const PRACTICAL_MAX_PREFIX_CHARS = 128;
+
 /** A prefix length in characters that keeps a string column inside the key budget. */
 export function suggestPrefixChars(
   column: SchemaColumn,
@@ -182,7 +193,7 @@ export function suggestPrefixChars(
   const budget = options.mysqlVersion >= 8 ? 3072 : 767;
   const byBytes = Math.floor(Math.min(budget, options.prefixBytes) / perChar);
   const declared = column.length ?? 64;
-  return Math.max(8, Math.min(declared, byBytes, 128));
+  return Math.max(8, Math.min(declared, byBytes, PRACTICAL_MAX_PREFIX_CHARS));
 }
 
 export function severityFor(hasSchema: boolean, base: Severity, withoutSchema: Severity): Severity {

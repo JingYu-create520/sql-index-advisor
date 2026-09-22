@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.3 — 2026-09-22
+
+Found by running the tool against somebody else's project instead of our own
+fixtures: `macrozheng/mall`, 104 hand-written MyBatis DAO files, with its
+production schema loaded into a live server.
+
+### Fixed
+
+- **`examples/schema-dump.sql` did not run on MySQL 5.7**, which is what its own
+  header comment claimed. The index block used a derived table referencing a column
+  of the outer query, and that is `LATERAL`, which 5.7 does not have:
+  `ERROR 1054 (42S22) at line 15: Unknown column 'tab.TABLE_SCHEMA' in 'where clause'`.
+  Every derived table in the file now filters on `DATABASE()` on its own, so nothing
+  is correlated. Verified on live 5.7.44 and 8.0.46 against the same 76-table schema:
+  both produce valid JSON, the table, column and index lists match between versions,
+  and `loadSchema` accepts either. Index and table names now go through `JSON_QUOTE`,
+  so a name containing a quote can no longer corrupt the document.
+- **SIA001 proposed an index for a primary key `IN` list.** A batch update of the
+  shape `WHERE id IN ( ? ) AND status = 1` drew `ADD INDEX (status, id)`. Reading the
+  primary key for that list is what the engine does anyway, and the remaining
+  predicates filter rows already in hand, so the second structure would cost writes
+  and never be chosen. `IN (subquery)` is still reported: there the list has no
+  static bound.
+- **SIA004 recommended a functional index to 5.7 users in English.** The DDL was
+  correctly withheld under `--mysql-version 5.7` and the Chinese text said why, but
+  `messageEn` was one fixed sentence ending "rewrite as a range or add a functional
+  index". The explanation of why each rewrite is equivalent also existed only in
+  Chinese; it is in both languages now.
+
+### Changed
+
+- `examples/seed-schema.sql` is documented as 8.0 only, with the errors it produces
+  on 5.7 (`Unknown system variable 'cte_max_recursion_depth'`, then a syntax error on
+  every `WITH RECURSIVE`). It is the demo data that needs 8.0, not the tool.
+- The 128-character asking price on a suggested prefix index is now a named constant
+  with a reason attached, instead of an unnamed literal silently overriding the byte
+  budget it claims to respect. `--prefix-bytes` shrinks the suggestion; raising it
+  past the ceiling still does not, and `docs/rules.md` says so.
+
 ## 0.1.2 — 2026-09-22
 
 ### Fixed
