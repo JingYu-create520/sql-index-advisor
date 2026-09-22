@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  Deliberately imperfect, so the Action that reviews this repository has something
+  to say. Each statement below is a shape the rule engine recognises: a join key
+  with no index, a function on an indexed column, a leading-wildcard LIKE that no
+  index can serve, and a hand-written deep offset. Keep this file; deleting it
+  would make the workflow that checks it say nothing, which proves less.
+-->
+<mapper namespace="com.example.demo.dao.OrderSearchDao">
+
+    <select id="listByShop" resultType="com.example.demo.model.OrderView">
+        SELECT o.id, o.order_sn, o.status, d.amount
+        FROM demo_order o
+        JOIN demo_order_detail d ON d.order_id = o.id
+        WHERE o.shop_id = #{shopId}
+          AND o.delete_status = 0
+        ORDER BY o.create_time DESC
+    </select>
+
+    <select id="countByDay" resultType="long">
+        SELECT COUNT(*)
+        FROM demo_order
+        WHERE DATE(create_time) = #{day}
+    </select>
+
+    <select id="search" resultType="com.example.demo.model.OrderView">
+        SELECT id, order_sn, receiver_name
+        FROM demo_order
+        WHERE receiver_name LIKE concat('%', #{keyword}, '%')
+        LIMIT #{offset}, 20
+    </select>
+
+    <select id="scrollPage" resultType="com.example.demo.model.OrderView">
+        SELECT id, order_sn
+        FROM demo_order
+        ORDER BY create_time DESC
+        LIMIT 120000, 20
+    </select>
+
+</mapper>

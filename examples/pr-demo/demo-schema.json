@@ -1,0 +1,41 @@
+{
+  "mysqlVersion": "8.0.46",
+  "tables": [
+    {
+      "name": "demo_order",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 480000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "order_sn", "type": "varchar", "length": 32, "charset": "utf8mb4", "nullable": false },
+        { "name": "shop_id", "type": "bigint", "nullable": false },
+        { "name": "user_id", "type": "bigint", "nullable": false },
+        { "name": "status", "type": "tinyint", "nullable": false },
+        { "name": "delete_status", "type": "tinyint", "nullable": false },
+        { "name": "receiver_name", "type": "varchar", "length": 64, "charset": "utf8mb4", "nullable": true },
+        { "name": "amount", "type": "decimal", "nullable": false },
+        { "name": "create_time", "type": "datetime", "nullable": true }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "unique": true, "primary": true, "columns": ["id"], "subParts": [null] }
+      ]
+    },
+    {
+      "name": "demo_order_detail",
+      "engine": "InnoDB",
+      "charset": "utf8mb4",
+      "rowCountEstimate": 1250000,
+      "columns": [
+        { "name": "id", "type": "bigint", "nullable": false },
+        { "name": "order_id", "type": "bigint", "nullable": false },
+        { "name": "product_id", "type": "bigint", "nullable": false },
+        { "name": "quantity", "type": "int", "nullable": false },
+        { "name": "amount", "type": "decimal", "nullable": false }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "unique": true, "primary": true, "columns": ["id"], "subParts": [null] }
+      ]
+    }
+  ]
+}

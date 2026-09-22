@@ -1,0 +1,35 @@
+name: Index review
+
+# The repository runs its own GitHub Action on every pull request that touches
+# SQL or Mapper XML. Two things are proven by this file existing: the `uses:` ref
+# in the README resolves, and a contributor gets advice on the line they changed
+# without anyone installing anything.
+#
+# `fail-on: off` on purpose. Adoption first: the check comments, it does not
+# redden the build. A team that wants a gate changes it to `error` in their own
+# copy (see examples/github-action/pr-review.yml).
+
+on:
+  pull_request:
+    paths:
+      - "**/*.xml"
+      - "**/*.sql"
+      - "examples/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Index review
+        uses: JingYu-create520/sql-index-advisor@v0
+        with:
+          path: examples/pr-demo
+          schema: examples/pr-demo/demo-schema.json
+          min-severity: info
+          fail-on: "off"
