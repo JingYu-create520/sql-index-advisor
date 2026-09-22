@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.1](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.1) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.2](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.2) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
@@ -208,7 +208,7 @@ Off by default: no key, no network, deterministic text. When on, the endpoint is
   - `mobile = ?` bound to a Java `Long`: SIA005 cannot see the parameter type.
   - Correlated subqueries are not expanded. SIA006 degrades to a template rather than risk a rewrite that changes the result set.
 
-Supported SQL subset: single `SELECT` / `INSERT` / `UPDATE` / `DELETE`, ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE`, `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note. It does not crash, and it does not invent a recommendation.
+Supported SQL subset: one `SELECT` / `INSERT` / `UPDATE` / `DELETE` per statement (inline input and `analyze_sql` accept several, separated by `;`), ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE`, `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note. It does not crash, and it does not invent a recommendation. Statements that run together without a `;` between them are refused rather than guessed at, because parsing two queries as one produces an index for a column of the other table.
 
 ## Where it got it wrong
 
@@ -256,7 +256,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-207 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+223 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 

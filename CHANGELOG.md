@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.2 — 2026-09-22
+
+### Fixed
+
+- **A MyBatis bind parameter truncated the statement.** `#{userId}` was read as
+  the start of a MySQL `#` comment, so everything after it to the end of the line
+  disappeared before the parser saw the SQL. `sia query "SELECT id FROM orders
+  WHERE user_id = #{userId} AND status = 'PAID'"` reported the evidence as
+  `WHERE user_id =` and proposed `(user_id)` for what is really a
+  `(user_id, status)` access path. It affected the inline path and the MCP
+  `analyze_sql` tool, in `stripComments` (fingerprints and evidence) and, once
+  0.1.1 added it, in `splitStatements` too. Both now treat `#{` as what the
+  tokenizer already treats it as: an opaque parameter. Mapper XML was never
+  affected, because it reaches the parser through its own path.
+- **The `v0` tag was missing from the repository**, while both READMEs and the
+  example workflow tell people to write `uses: JingYu-create520/sql-index-advisor@v0`.
+  That reference does not resolve, so the documented Action setup failed at the
+  first line. `v0` is published again, pointing at the newest release, and
+  `docs/DESIGN-NOTES.md` now lists moving it as part of cutting a release.
+
+### Added
+
+- `tests/merged.test.ts` covers the bind-parameter cases, including one where the
+  placeholder sits in the middle of an `UPDATE ... WHERE`.
+
 ## 0.1.1 — 2026-09-21
 
 ### Fixed
