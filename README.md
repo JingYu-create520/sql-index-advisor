@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.3](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.3) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.4](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.4) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **Offline index advisor for MySQL / MyBatis. Slow query log in, index recommendations and migration SQL out.**
 
@@ -130,7 +130,7 @@ Before the recommended index, `EXPLAIN` falls back to the partial `idx_user_pay`
 | SIA001 | Missing index candidate | — | No usable index for the access path; orders columns **equality → sort/group → range** |
 | SIA002 | Prefix index | schema | Long `VARCHAR` / `TEXT` in predicates, budget computed **in bytes** (not the utf8mb3-era "255" rule) |
 | SIA003 | Leftmost-prefix violation | schema | Query skips an index middle column; invisible in `EXPLAIN`'s `key`, visible in `key_len` |
-| SIA004 | Function on an indexed column | — | `DATE(create_time) = ?` → half-open range rewrite, and a functional-index option on 8.0 |
+| SIA004 | Function on an indexed column | — | `DATE(create_time) = ?` → half-open range rewrite, a functional-index option on 8.0, and a leading-wildcard `LIKE '%x%'` reported as un-indexable instead of passed as clean |
 | SIA005 | Implicit type conversion | schema | `varchar_col = 123`, the direction that actually breaks the index |
 | SIA006 | Deep pagination | — | Literal `LIMIT 100000, 20` → deferred join and keyset rewrite |
 | SIA007 | Covering index opportunity | schema + slow log | High `Rows_examined`, narrow projection → index extension that removes the lookup |
@@ -208,7 +208,7 @@ Off by default: no key, no network, deterministic text. When on, the endpoint is
   - `mobile = ?` bound to a Java `Long`: SIA005 cannot see the parameter type.
   - Correlated subqueries are not expanded. SIA006 degrades to a template rather than risk a rewrite that changes the result set.
 
-Supported SQL subset: one `SELECT` / `INSERT` / `UPDATE` / `DELETE` per statement (inline input and `analyze_sql` accept several, separated by `;`), ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE`, `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note. It does not crash, and it does not invent a recommendation. Statements that run together without a `;` between them are refused rather than guessed at, because parsing two queries as one produces an index for a column of the other table.
+Supported SQL subset: one `SELECT` / `INSERT` / `UPDATE` / `DELETE` per statement (inline input and `analyze_sql` accept several, separated by `;`), ANSI and comma joins, `WHERE` with `=`, `IN`, ranges, `BETWEEN`, prefix `LIKE` (a `LIKE` that starts with `%` is reported as un-indexable rather than ignored), `IS NULL`, `GROUP BY`, `ORDER BY`, `LIMIT`. Anything outside it is skipped with an `info` note. It does not crash, and it does not invent a recommendation. Statements that run together without a `;` between them are refused rather than guessed at, because parsing two queries as one produces an index for a column of the other table.
 
 ## Where it got it wrong
 
@@ -263,7 +263,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-226 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
+228 tests. Beyond hand-written cases, `tests/fuzz.test.ts` generates about 1,200 statements plus a list of deliberately malformed ones and asserts the properties that must hold for any input: never throw, never index a column that does not exist, never propose an index another already covers, and produce byte-identical output on repeated runs. That suite is what caught the tokenizer reading `1e999` as `1` plus a column named `e999`, and signed literals splitting one query pattern into two fingerprints. Fixtures under `tests/fixtures/` are real-shaped MySQL 8.0 logs, including a messy one with administrator commands, multi-line statements and an unterminated tail.
 
 ## License
 

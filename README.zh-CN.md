@@ -1,6 +1,6 @@
 # sql-index-advisor
 
-[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.3](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.3) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/JingYu-create520/sql-index-advisor/ci.yml?branch=main&label=CI)](https://github.com/JingYu-create520/sql-index-advisor/actions/workflows/ci.yml) [![release v0.1.4](https://img.shields.io/github/v/tag/JingYu-create520/sql-index-advisor?label=release)](https://github.com/JingYu-create520/sql-index-advisor/releases/tag/v0.1.4) [![license MIT](https://img.shields.io/github/license/JingYu-create520/sql-index-advisor)](LICENSE)
 
 **面向 MySQL / MyBatis 的离线索引顾问。慢查询日志进，索引建议 + 迁移 SQL 出。**
 
@@ -125,7 +125,7 @@ docker exec sia-mysql mysql -uroot -psia demo -e "EXPLAIN SELECT * FROM orders W
 | SIA001 | 缺失索引候选 | — | 访问路径无可用索引；列顺序按**等值 → 排序/GROUP BY → 范围** |
 | SIA002 | 前缀索引 | schema | 过长的 `VARCHAR` / `TEXT` 进入谓词；阈值按**字节**算，不是 utf8mb3 时代的"255" |
 | SIA003 | 最左前缀违反 | schema | 跳过复合索引中间列，`EXPLAIN` 的 `key` 看不出来，`key_len` 才看得出来 |
-| SIA004 | 索引列上使用函数 | — | `DATE(create_time) = ?` → 左闭右开区间改写，8.0 另给函数索引方案 |
+| SIA004 | 索引列上使用函数 | — | `DATE(create_time) = ?` → 左闭右开区间改写，8.0 另给函数索引方案；以 `%` 开头的 `LIKE` 会被明确报成「建索引也没用」，而不是当成没问题 |
 | SIA005 | 隐式类型转换 | schema | `varchar列 = 123`，只有这个方向真的会让索引失效 |
 | SIA006 | 深分页 | — | 字面量 `LIMIT 100000, 20` → 延迟关联 + 游标两种改写 |
 | SIA007 | 覆盖索引机会 | schema + 慢日志 | 扫描行数高但投影窄 → 扩展索引消除回表 |
@@ -201,7 +201,7 @@ sia slow.log --llm
   - `mobile = ?` 绑的是 Java `Long`，SIA005 看不见参数类型。
   - 相关子查询不展开。SIA006 会降级成只给模板，不敢给出可能改变结果集的改写。
 
-支持的 SQL 子集：每条语句一个 `SELECT` / `INSERT` / `UPDATE` / `DELETE`（内联输入和 `analyze_sql` 支持多条，用 `;` 分隔），ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。挤在一起又没写分号的语句会被直接拒绝，不会硬猜：把两条查询当成一条解析，给出的就是另一张表的索引。
+支持的 SQL 子集：每条语句一个 `SELECT` / `INSERT` / `UPDATE` / `DELETE`（内联输入和 `analyze_sql` 支持多条，用 `;` 分隔），ANSI JOIN 与逗号 JOIN，`WHERE` 中的 `=`、`IN`、范围、`BETWEEN`、前缀 `LIKE`（以 `%` 开头的 `LIKE` 会被明确报成无法用索引，而不是被忽略）、`IS NULL`，以及 `GROUP BY`、`ORDER BY`、`LIMIT`。超出这个范围的语句会被跳过并给一条 `info` 提示，不会崩，也不会编造建议。挤在一起又没写分号的语句会被直接拒绝，不会硬猜：把两条查询当成一条解析，给出的就是另一张表的索引。
 
 ## 它答错过的地方
 
@@ -256,7 +256,7 @@ npm run build         # tsup -> dist/
 node dist/cli.js examples/slow.log
 ```
 
-226 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
+228 个测试。除了手写用例，`tests/fuzz.test.ts` 会生成约 1200 条语句再加一批刻意畸形的输入，断言那些"对任何输入都必须成立"的性质：不崩、不给不存在的列建索引、不推荐已被覆盖的索引、重复运行输出逐字节一致。这个套件抓到过两个真 bug：分词器把 `1e999` 读成 `1` 加一个名叫 `e999` 的列，以及带符号字面量把同一个查询模式裂成两个指纹。`tests/fixtures/` 里是真实形态的 MySQL 8.0 慢日志，包含一份脏的：有 administrator command、多行语句和一条没闭合的尾部语句。
 
 ## 许可
 

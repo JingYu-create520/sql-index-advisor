@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.4 — 2026-09-22
+
+### Fixed
+
+- **A leading-wildcard `LIKE '%x%'` used to produce an empty report.** No B-tree
+  index can use that predicate for a seek or a range narrowing, so there is
+  nothing to recommend, but printing `nothing to report` over a query that is
+  guaranteed to scan is the one thing this tool promised not to do: silence has to
+  be attributable. SIA004 now emits an `info` finding naming the predicate,
+  carrying no DDL, and listing the three actual ways out (right-anchored LIKE,
+  fulltext with `MATCH AGAINST`, or requiring a prefix from the caller). A
+  right-anchored `LIKE 'abc%'` is still treated as indexable and stays quiet.
+  Found while reviewing the same real project's search queries.
+
 ## 0.1.3 — 2026-09-22
 
 Found by running the tool against somebody else's project instead of our own
