@@ -110,6 +110,34 @@ describe("SIA001 missing index candidate", () => {
     ).toEqual([]);
   });
 
+  /**
+   * `ON d.order_id = o.id` puts the driving table's primary key in the bucket, but
+   * there it is a value handed to the inner table, not a filter. InnoDB already
+   * appends the PK to every secondary index, so that slot bought nothing and it
+   * pushed the sort column past the ordering it was meant to serve.
+   */
+  it("positive: the driving side's primary key is not indexed for a join", () => {
+    const findings = runRule(
+      sia001,
+      "SELECT o.id FROM orders o JOIN order_item oi ON oi.order_id = o.id WHERE o.shop_id = 1 AND o.status = 'PAID' ORDER BY o.create_time",
+      { schema: TEST_SCHEMA },
+    );
+    const orders = findings.find((f) => f.table === "orders");
+    expect(orders?.indexColumns).toEqual(["shop_id", "status", "create_time"]);
+    // and the inner table still gets its join key
+    expect(findings.some((f) => f.table === "order_item" && f.indexColumns?.[0] === "order_id")).toBe(true);
+  });
+
+  it("without a schema the join key cannot be recognised, so the advice stays conservative", () => {
+    const findings = runRule(
+      sia001,
+      "SELECT o.id FROM orders o JOIN order_item oi ON oi.order_id = o.id WHERE o.shop_id = 1 AND o.status = 'PAID' ORDER BY o.create_time",
+    );
+    const orders = findings.find((f) => f.table === "orders");
+    expect(orders?.indexColumns).toEqual(["shop_id", "status", "id", "create_time"]);
+    expect(orders?.severity).toBe("info");
+  });
+
   it("negative: a unique lookup returns one row, extra predicates need no index", () => {
     expect(
       runRule(sia001, "SELECT id FROM orders WHERE order_no = 'A1' AND status = 'PAID'", {

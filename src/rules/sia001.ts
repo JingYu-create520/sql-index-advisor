@@ -41,10 +41,10 @@ export const sia001: Rule = {
     const findings: Finding[] = [];
 
     for (const bucket of buckets) {
-      const candidate = candidateColumns(bucket);
+      const table = findTable(schema, bucket.table);
+      const candidate = candidateColumns(bucket, table);
       if (candidate.length === 0) continue;
 
-      const table = findTable(schema, bucket.table);
       const dropped = unindexableColumns(table, candidate, options);
       const usable = candidate.filter((c) => !dropped.includes(c));
       if (usable.length === 0) continue;
@@ -109,8 +109,8 @@ export const sia001: Rule = {
  * equality -> grouping/ordering -> IN -> range, deduped and capped at 4 columns:
  * a five-segment composite index is almost always a design smell, not advice.
  */
-function candidateColumns(bucket: TableBucket): string[] {
-  const equality = dedupeColumns(bucket.equality);
+function candidateColumns(bucket: TableBucket, table?: SchemaTable): string[] {
+  const equality = dedupeColumns(bucket.equality.filter((r) => !isJoinOutputKey(r, table)));
   const ordering = dedupeColumns([...bucket.grouping, ...bucket.ordering]);
   const inList = dedupeColumns(bucket.inList).filter((c) => !equality.some((e) => e.column === c.column));
   const range = dedupeColumns(bucket.range).filter(
@@ -118,7 +118,7 @@ function candidateColumns(bucket: TableBucket): string[] {
   );
 
   const ordered: ColumnRef[] = [];
-  // Only honour ordering when nothing before it is a range: that is the whole point of R1.
+  // Only honour ordering when nothing before it is a range: that is the whole point of D1.
   const orderingUsable = range.length === 0 || ordering.length > 0;
   ordered.push(...equality);
   if (orderingUsable) ordered.push(...ordering);
@@ -131,6 +131,29 @@ function candidateColumns(bucket: TableBucket): string[] {
     if (names.length >= 4) break;
   }
   return names;
+}
+
+/**
+ * The primary key of a table, when it is a single column.
+ */
+function singlePrimaryKey(table: SchemaTable | undefined): string | undefined {
+  const pk = table?.indexes.find((i) => i.primary);
+  return pk && pk.columns.length === 1 ? pk.columns[0] : undefined;
+}
+
+/**
+ * True for the driving side of a join: `ON d.order_id = o.id` puts `o.id` in the
+ * bucket, but on `o` that column is a value being handed to the inner table, not a
+ * filter narrowing `o`. InnoDB appends the primary key to every secondary index
+ * anyway, so a slot spent on it displaces a column that would have done work. Seen
+ * on a real project's query: `(shop_id, delete_status, id, create_time)`, where the
+ * `id` bought nothing and pushed `create_time` past the sort it was meant to serve.
+ */
+function isJoinOutputKey(ref: ColumnRef, table: SchemaTable | undefined): boolean {
+  if (ref.scope !== "join-on") return false;
+  const pk = singlePrimaryKey(table);
+  if (!pk || ref.column !== pk) return false;
+  return true;
 }
 
 function unindexableColumns(
@@ -173,7 +196,7 @@ function resolvesByUniqueLookup(
   bucket: TableBucket,
 ): boolean {
   if (!table) return false;
-  const equality = dedupeColumns(bucket.equality).map((c) => c.column);
+  const equality = whereEqualityColumns(bucket);
   if (equality.length === 0) return false;
   return table.indexes.some(
     (index) =>
@@ -205,13 +228,24 @@ function resolvesByPrimaryKeyIn(
   return bucket.inList.some((ref) => ref.column === pkColumn && (ref.op ?? "in") === "in");
 }
 
+/**
+ * Only the WHERE clause filters a table. A column that reaches the bucket through
+ * `ON other.key = t.id` is a value handed to the join partner, not a narrowing
+ * predicate, and counting it made two skips fire on it: a table joined on its
+ * primary key looked like a unique lookup, and its real WHERE conditions were
+ * judged already indexed. Both checks now ignore join conditions.
+ */
+function whereEqualityColumns(bucket: TableBucket): string[] {
+  return dedupeColumns(bucket.equality.filter((r) => r.scope !== "join-on")).map((c) => c.column);
+}
+
 /** True when some existing index already serves every equality column of this table. */
 function equalityAlreadyIndexed(
   table: SchemaTable | undefined,
   bucket: TableBucket,
 ): boolean {
   if (!table) return false;
-  const equality = dedupeColumns(bucket.equality).map((c) => c.column);
+  const equality = whereEqualityColumns(bucket);
   if (equality.length === 0) return false;
   return table.indexes.some((index) =>
     equality.every((column, position) => index.columns[position] === column),
